@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ExtensionManifest Version="8.0"
+  ExtensionBundleId="com.sizer.ai.illustrator"
+  ExtensionBundleName="Sizer Illustrator"
+  ExtensionBundleVersion="0.2.3">
+  <ExtensionList>
+    <Extension Id="com.sizer.ai.illustrator.panel" Version="0.2.3" />
+  </ExtensionList>
+  <ExecutionEnvironment>
+    <HostList>
+      <Host Name="ILST" Version="[17.0,99.9]" />
+    </HostList>
+    <LocaleList>
+      <Locale Code="All" />
+    </LocaleList>
+    <RequiredRuntimeList>
+      <RequiredRuntime Name="CSXS" Version="12.0" />
+    </RequiredRuntimeList>
+  </ExecutionEnvironment>
+  <DispatchInfoList>
+    <Extension Id="com.sizer.ai.illustrator.panel">
+      <DispatchInfo>
+        <Resources>
+          <MainPath>./index.html</MainPath>
+          <ScriptPath>./jsx/host.jsx</ScriptPath>
+        </Resources>
+        <Lifecycle>
+          <AutoVisible>false</AutoVisible>
+        </Lifecycle>
+        <UI>
+          <Type>Panel</Type>
+          <Menu>Sizer Illustrator 2026</Menu>
+          <Icons>
+            <Icon Type="Normal">./icon.png</Icon>
+            <Icon Type="RollOver">./icon.png</Icon>
+            <Icon Type="DarkNormal">./icon.png</Icon>
+            <Icon Type="DarkRollOver">./icon.png</Icon>
+          </Icons>
+          <Geometry>
+            <Size>
+              <Width>760</Width>
+              <Height>660</Height>
+            </Size>
+            <MinSize>
+              <Width>380</Width>
+              <Height>420</Height>
+            </MinSize>
+            <MaxSize>
+              <Width>2200</Width>
+              <Height>1800</Height>
+            </MaxSize>
+          </Geometry>
+        </UI>
+      </DispatchInfo>
+    </Extension>
+  </DispatchInfoList>
+</ExtensionManifest>
