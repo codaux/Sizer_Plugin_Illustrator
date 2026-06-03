@@ -12,7 +12,9 @@ var SIZER_HOST_STATE = {
     rows: [],
     settings: null,
     financials: null,
-    lastRun: null
+    lastRun: null,
+    logs: [],
+    workFiles: {}
 };
 
 function trimStr(s){ return String(s).replace(/^\s+|\s+$/g, ""); }
@@ -29,6 +31,29 @@ function stabilizeIllustratorHost(waitMs){
 function makeTimestampTag(){
     var d = new Date();
     return d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) + "_" + pad2(d.getHours()) + pad2(d.getMinutes()) + pad2(d.getSeconds());
+}
+
+function sizerNowLabel(){
+    var d = new Date();
+    return pad2(d.getHours()) + ":" + pad2(d.getMinutes()) + ":" + pad2(d.getSeconds());
+}
+
+function sizerLog(level, message, rowIndex, fileName){
+    try {
+        if (!SIZER_HOST_STATE.logs) SIZER_HOST_STATE.logs = [];
+        SIZER_HOST_STATE.logs.push({
+            time: sizerNowLabel(),
+            level: level || "info",
+            row: typeof rowIndex === "number" ? rowIndex + 1 : "",
+            file: fileName || "",
+            message: String(message || "")
+        });
+        while (SIZER_HOST_STATE.logs.length > 250) SIZER_HOST_STATE.logs.shift();
+    } catch (eLog) {}
+}
+
+function sizerErrorMessage(e){
+    return e && e.message ? e.message : String(e || "Unknown error.");
 }
 
 function stripExt(name){
@@ -1015,7 +1040,24 @@ function sizerSuccess(data){
 }
 
 function sizerFailure(message){
-    return sizerStringify({ ok: false, error: String(message || "Unknown error.") });
+    return sizerStringify({ ok: false, error: String(message || "Unknown error."), data: { logs: SIZER_HOST_STATE.logs || [] } });
+}
+
+function sizerNormalizeSelectedIndexes(rawIndexes){
+    var normalizedIndexes = [];
+    var seen = {};
+    var i;
+
+    rawIndexes = rawIndexes || [];
+    for (i = 0; i < rawIndexes.length; i++){
+        var idx = parseInt(rawIndexes[i], 10);
+        if (isNaN(idx) || idx < 0 || idx >= SIZER_HOST_STATE.items.length) continue;
+        if (seen[idx]) continue;
+        seen[idx] = true;
+        normalizedIndexes.push(idx);
+    }
+    normalizedIndexes.sort(function(a, b){ return a - b; });
+    return normalizedIndexes;
 }
 
 function sizerNormalizeSettings(raw){
@@ -1057,13 +1099,14 @@ function sizerSerializeRow(index){
         outputH: row.outputH,
         outputSize: row.outputSize || "",
         outputFsPath: row.outputFsPath || "",
+        workFsPath: row.workFsPath || "",
         statusNote: row.statusNote || "",
         delta: row.delta || "",
         status: row.status || "",
         rowClass: row.rowClass || "",
         sourcePath: sourcePath,
         isMatched: !!(matchInfo.file && matchInfo.file.exists),
-        isSelectable: row.status !== "MISSING_FILE" && row.status !== "BAD_WIDTH_HEIGHT"
+        isSelectable: true
     };
 }
 
@@ -1079,6 +1122,7 @@ function sizerBuildSnapshot(message){
         summary: buildReportStats(SIZER_HOST_STATE.rows),
         financials: SIZER_HOST_STATE.financials,
         lastRun: SIZER_HOST_STATE.lastRun,
+        logs: SIZER_HOST_STATE.logs || [],
         rows: rows
     };
 }
@@ -1172,17 +1216,34 @@ function sizerCanExportStatus(status){
     return status === "OK" || status === "CHECK";
 }
 
-function sizerMeasureAndMaybeExport(item, settings, exportFolder){
+function sizerReturnWithWorkFile(row, rowIndex, tempFile){
+    if (row && tempFile) {
+        try {
+            row.workFsPath = tempFile.fsName;
+            if (!SIZER_HOST_STATE.workFiles) SIZER_HOST_STATE.workFiles = {};
+            SIZER_HOST_STATE.workFiles[String(rowIndex)] = tempFile.fsName;
+        } catch (eWorkPath) {}
+    }
+    return row;
+}
+
+function sizerSizeItem(item, settings, rowIndex){
     var matchInfo = item.matchInfo || { file: null, matchType: "missing", suggested: "" };
 
-    if (isNaN(item.width) || isNaN(item.height)) return sizerPrepareStatusRow(item, "BAD_WIDTH_HEIGHT");
-    if (!matchInfo.file || !matchInfo.file.exists) return sizerPrepareStatusRow(item, "MISSING_FILE");
+    if (isNaN(item.width) || isNaN(item.height)) {
+        sizerLog("error", "Size skipped: order dimensions could not be parsed.", rowIndex, item.file);
+        return sizerPrepareStatusRow(item, "BAD_WIDTH_HEIGHT");
+    }
+    if (!matchInfo.file || !matchInfo.file.exists) {
+        sizerLog("error", "Size skipped: no matched source file exists.", rowIndex, item.file);
+        return sizerPrepareStatusRow(item, "MISSING_FILE");
+    }
 
     var tempFile = null;
     var doc = null;
-    var outputFilePath = "";
 
     try {
+        sizerLog("info", "Size started.", rowIndex, item.file);
         tempFile = sizerCreateTempWorkingCopy(matchInfo.file);
         doc = app.open(tempFile);
         sizerEnsureDocumentActive(doc, "Opened temp document but could not activate it.");
@@ -1192,7 +1253,8 @@ function sizerMeasureAndMaybeExport(item, settings, exportFolder){
 
         sizerEnsureDocumentActive(doc, "There is no active temp document for unlock/show.");
         if (!unlockAllArtwork(doc)){
-            return sizerPrepareStatusRow(item, "UNLOCK_FAIL", "Could not unlock/show all artwork in the file.");
+            sizerLog("error", "Unlock failed before sizing.", rowIndex, item.file);
+            return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "UNLOCK_FAIL", "Could not unlock/show all artwork in the file."), rowIndex, tempFile);
         }
 
         if (settings.runWeMustAction){
@@ -1200,12 +1262,14 @@ function sizerMeasureAndMaybeExport(item, settings, exportFolder){
                 sizerEnsureDocumentActive(doc, "There is no active temp document for WeMust.");
                 app.doScript("WeMust", "WeMust");
             } catch (eAction) {
-                return sizerPrepareStatusRow(item, "ACTION_FAIL", "Illustrator action WeMust / WeMust failed.");
+                sizerLog("error", "WeMust action failed: " + sizerErrorMessage(eAction), rowIndex, item.file);
+                return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "ACTION_FAIL", "Illustrator action WeMust / WeMust failed."), rowIndex, tempFile);
             }
 
             sizerEnsureDocumentActive(doc, "There is no active temp document after WeMust.");
             if (!unlockAllArtwork(doc)){
-                return sizerPrepareStatusRow(item, "UNLOCK_FAIL", "Could not unlock/show all artwork after running the action.");
+                sizerLog("error", "Unlock failed after WeMust.", rowIndex, item.file);
+                return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "UNLOCK_FAIL", "Could not unlock/show all artwork after running the action."), rowIndex, tempFile);
             }
         }
 
@@ -1219,12 +1283,14 @@ function sizerMeasureAndMaybeExport(item, settings, exportFolder){
             b0 = getArtworkBounds(artworkItems);
         }
         if (!b0) {
-            return sizerPrepareStatusRow(item, "NO_ARTWORK", "No usable artwork bounds were detected. Source file was opened for inspection.", true);
+            sizerLog("error", "No usable artwork bounds were detected.", rowIndex, item.file);
+            return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "NO_ARTWORK", "No usable artwork bounds were detected. Working file stayed open for inspection.", true), rowIndex, tempFile);
         }
 
         var cur = boundsSizePt(b0);
         if (cur.w <= 0 || cur.h <= 0) {
-            return sizerPrepareStatusRow(item, "BAD_BOUNDS", "Artwork bounds were detected but width/height resolved to zero.", true);
+            sizerLog("error", "Artwork bounds resolved to zero.", rowIndex, item.file);
+            return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "BAD_BOUNDS", "Artwork bounds were detected but width/height resolved to zero.", true), rowIndex, tempFile);
         }
 
         var sx = ((item.width * 72) / cur.w) * 100.0;
@@ -1234,12 +1300,18 @@ function sizerMeasureAndMaybeExport(item, settings, exportFolder){
         else if (settings.resizeMode === "respectHeight") scaleResult = scaleArtworkItems(artworkItems, sy, sy, b0);
         else scaleResult = scaleArtworkItems(artworkItems, sx, sy, b0);
 
-        if (!scaleResult || !scaleResult.ok) return sizerPrepareStatusRow(item, "RESIZE_FAIL", "One or more artwork items failed during resize.");
+        if (!scaleResult || !scaleResult.ok) {
+            sizerLog("error", "Resize failed on one or more items.", rowIndex, item.file);
+            return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "RESIZE_FAIL", "One or more artwork items failed during resize."), rowIndex, tempFile);
+        }
 
         artworkItems = getTopLevelArtworkItems(doc);
         if (!getArtworkBounds(artworkItems)) artworkItems = getFallbackArtworkItems(doc);
         sizerEnsureDocumentActive(doc, "There is no active temp document for artboard fitting.");
-        if (!fitArtboardToArtwork(doc, artworkItems, ARTBOARD_PADDING_PT)) return sizerPrepareStatusRow(item, "FIT_ARTBOARD_FAIL", "The artboard could not be fitted to the detected artwork.");
+        if (!fitArtboardToArtwork(doc, artworkItems, ARTBOARD_PADDING_PT)) {
+            sizerLog("error", "Artboard fit failed.", rowIndex, item.file);
+            return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "FIT_ARTBOARD_FAIL", "The artboard could not be fitted to the detected artwork."), rowIndex, tempFile);
+        }
 
         var bOut = getArtworkBounds(artworkItems);
         var outPt = bOut ? boundsSizePt(bOut) : { w: 0, h: 0 };
@@ -1262,26 +1334,96 @@ function sizerMeasureAndMaybeExport(item, settings, exportFolder){
             ""
         );
 
-        if (!sizerCanExportStatus(measuredRow.status)) return measuredRow;
+        sizerLog(measuredRow.status === "OK" ? "info" : "warn", "Size finished with status " + measuredRow.status + ".", rowIndex, item.file);
+        return sizerReturnWithWorkFile(measuredRow, rowIndex, tempFile);
+    } catch (eProc) {
+        sizerLog("error", "Size failed: " + sizerErrorMessage(eProc), rowIndex, item.file);
+        return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "PROCESS_ERROR", sizerErrorMessage(eProc)), rowIndex, tempFile);
+    } finally {
+        stabilizeIllustratorHost(40);
+    }
+}
 
-        var base = makeBaseWithQtyOption(item.qty, stripExt(item.file), settings.filenameFormat);
-        if (settings.printTypeMode === "prefix" && item.printType) base = item.printType + "___" + base;
+function sizerBuildExportBase(item, settings){
+    var base = makeBaseWithQtyOption(item.qty, stripExt(item.file), settings.filenameFormat);
+    if (settings.printTypeMode === "prefix" && item.printType) base = item.printType + "___" + base;
+    return base;
+}
 
+function sizerOpenDocumentForExport(item, row, rowIndex){
+    var matchInfo = item.matchInfo || { file: null, matchType: "missing", suggested: "" };
+    var fileObj = null;
+    var usingWorkFile = false;
+    var openedForExport = false;
+    var doc = null;
+
+    if (row && row.workFsPath) {
+        try {
+            fileObj = new File(row.workFsPath);
+            if (fileObj.exists) {
+                doc = sizerGetOpenDocumentByFile(fileObj);
+                if (doc) usingWorkFile = true;
+                else {
+                    sizerLog("warn", "Working file is closed; exporting the matched source file as-is.", rowIndex, item.file);
+                    fileObj = null;
+                }
+            } else {
+                fileObj = null;
+            }
+        } catch (eWorkFile) {
+            fileObj = null;
+        }
+    }
+
+    if (!fileObj && matchInfo.file && matchInfo.file.exists) {
+        fileObj = matchInfo.file;
+        sizerLog("warn", "No open working file found; exporting the matched source file as-is.", rowIndex, item.file);
+    }
+
+    if (!fileObj || !fileObj.exists) {
+        sizerLog("error", "Export skipped: no matched or working file exists.", rowIndex, item.file);
+        return { doc: null, openedForExport: false, usingWorkFile: false };
+    }
+
+    if (!doc) doc = sizerGetOpenDocumentByFile(fileObj);
+    if (!doc) {
+        doc = app.open(fileObj);
+        openedForExport = !usingWorkFile;
+    }
+    sizerEnsureDocumentActive(doc, "Could not activate document for export.");
+    return { doc: doc, openedForExport: openedForExport, usingWorkFile: usingWorkFile };
+}
+
+function sizerExportItemAsIs(item, row, settings, exportFolder, rowIndex){
+    var opened = null;
+    var doc = null;
+
+    try {
+        opened = sizerOpenDocumentForExport(item, row, rowIndex);
+        doc = opened.doc;
+        if (!doc) return false;
+
+        var base = sizerBuildExportBase(item, settings);
         var destFolder = getOutputFolderByPrintType(exportFolder, settings.printTypeMode, item.printType);
+        var outputFilePath = new File(destFolder.fsName + "/" + base + ".png").fsName;
+        sizerRemoveFileIfExists(outputFilePath);
+
         var prefixPNG = base + "__PNG__";
-        sizerEnsureDocumentActive(doc, "There is no active temp document for export.");
+        sizerEnsureDocumentActive(doc, "There is no active document for export.");
         var ab1 = doc.artboards.getActiveArtboardIndex() + 1;
         exportPNG_Resolution(doc, destFolder, prefixPNG, TARGET_PPI, true, ab1);
         renameLatestExport(destFolder, prefixPNG, base + ".png", "png");
 
-        outputFilePath = new File(destFolder.fsName + "/" + base + ".png").fsName;
-        measuredRow.outputFsPath = outputFilePath;
-        return measuredRow;
-    } catch (eProc) {
-        return sizerPrepareStatusRow(item, "PROCESS_ERROR", eProc && eProc.message ? eProc.message : String(eProc));
+        row.outputFsPath = outputFilePath;
+        sizerLog("info", "Exported PNG: " + outputFilePath, rowIndex, item.file);
+        return true;
+    } catch (eExport) {
+        sizerLog("error", "Export failed: " + sizerErrorMessage(eExport), rowIndex, item.file);
+        return false;
     } finally {
-        try { if (doc) doc.close(SaveOptions.DONOTSAVECHANGES); } catch (eClose) {}
-        try { if (tempFile && tempFile.exists) tempFile.remove(); } catch (eTemp) {}
+        try {
+            if (opened && opened.openedForExport && doc) doc.close(SaveOptions.DONOTSAVECHANGES);
+        } catch (eCloseExport) {}
         stabilizeIllustratorHost(40);
     }
 }
@@ -1310,9 +1452,16 @@ function sizerClearState(){
         rows: [],
         settings: null,
         financials: null,
-        lastRun: null
+        lastRun: null,
+        logs: [],
+        workFiles: {}
     };
     return sizerSuccess({ cleared: true });
+}
+
+function sizerClearLog(){
+    SIZER_HOST_STATE.logs = [];
+    return sizerSuccess({ logs: [] });
 }
 
 function sizerScan(payloadJson){
@@ -1346,6 +1495,8 @@ function sizerScan(payloadJson){
         SIZER_HOST_STATE.rows = buildInitialReportRows(items);
         SIZER_HOST_STATE.settings = settings;
         SIZER_HOST_STATE.financials = parseEmailFinancials(emailText, items);
+        SIZER_HOST_STATE.logs = [];
+        SIZER_HOST_STATE.workFiles = {};
         SIZER_HOST_STATE.lastRun = {
             scannedAt: (new Date()).toString(),
             processed: 0,
@@ -1354,10 +1505,12 @@ function sizerScan(payloadJson){
             selectedCount: 0,
             missingCount: missingCount
         };
+        sizerLog("info", "Scan completed. Items: " + items.length + ", missing: " + missingCount + ".", null, "");
 
         return sizerSuccess(sizerBuildSnapshot("Scan completed."));
     } catch (e) {
-        return sizerFailure(e && e.message ? e.message : e);
+        sizerLog("error", "Scan failed: " + sizerErrorMessage(e), null, "");
+        return sizerFailure(sizerErrorMessage(e));
     }
 }
 
@@ -1370,17 +1523,38 @@ function sizerActivateRow(payloadJson){
         if (isNaN(index) || index < 0 || index >= SIZER_HOST_STATE.items.length) return sizerFailure("Invalid row index.");
 
         var item = SIZER_HOST_STATE.items[index];
+        var row = SIZER_HOST_STATE.rows[index];
         var matchInfo = item.matchInfo || { file: null, matchType: "missing", suggested: "" };
-        if (!matchInfo.file || !matchInfo.file.exists) return sizerFailure("This row does not have a matched source file.");
+        var targetFile = null;
+        if (row && row.workFsPath) {
+            try {
+                targetFile = new File(row.workFsPath);
+                if (targetFile.exists) {
+                    var workDoc = sizerGetOpenDocumentByFile(targetFile);
+                    if (workDoc) {
+                        sizerActivateDocument(workDoc);
+                        stabilizeIllustratorHost(60);
+                        return sizerSuccess({ opened: false, file: workDoc.name, index: index });
+                    }
+                    targetFile = null;
+                } else {
+                    targetFile = null;
+                }
+            } catch (eWorkActivate) {
+                targetFile = null;
+            }
+        }
+        if (!targetFile && matchInfo.file && matchInfo.file.exists) targetFile = matchInfo.file;
+        if (!targetFile || !targetFile.exists) return sizerFailure("This row does not have a matched or working file.");
 
-        var doc = sizerGetOpenDocumentByFile(matchInfo.file);
+        var doc = sizerGetOpenDocumentByFile(targetFile);
         if (doc) {
             sizerActivateDocument(doc);
             stabilizeIllustratorHost(60);
             return sizerSuccess({ opened: false, file: doc.name, index: index });
         }
 
-        doc = app.open(matchInfo.file);
+        doc = app.open(targetFile);
         stabilizeIllustratorHost(80);
         sizerActivateDocument(doc);
         return sizerSuccess({ opened: true, file: doc.name, index: index });
@@ -1389,36 +1563,21 @@ function sizerActivateRow(payloadJson){
     }
 }
 
-function sizerProcessSelected(payloadJson){
+function sizerSizeSelected(payloadJson){
     if (!SIZER_HOST_STATE.ready) return sizerFailure("Scan the folder and email first.");
 
     var oldUserInteractionLevel = app.userInteractionLevel;
     try {
         var payload = sizerParsePayload(payloadJson);
         var settings = sizerNormalizeSettings(payload.settings || SIZER_HOST_STATE.settings);
-        var rawIndexes = payload.selectedIndexes || [];
-        var normalizedIndexes = [];
-        var seen = {};
+        var normalizedIndexes = sizerNormalizeSelectedIndexes(payload.selectedIndexes || []);
         var i;
-
-        for (i = 0; i < rawIndexes.length; i++){
-            var idx = parseInt(rawIndexes[i], 10);
-            if (isNaN(idx) || idx < 0 || idx >= SIZER_HOST_STATE.items.length) continue;
-            if (seen[idx]) continue;
-            seen[idx] = true;
-            normalizedIndexes.push(idx);
-        }
 
         if (!normalizedIndexes.length) return sizerFailure("Select at least one row.");
 
-        normalizedIndexes.sort(function(a, b){ return a - b; });
         SIZER_HOST_STATE.settings = settings;
 
-        var exportFolder = new Folder(SIZER_HOST_STATE.inputFolder.fsName + "/Export");
-        ensureFolder(exportFolder);
-
         var processed = 0;
-        var exported = 0;
         var skipped = 0;
         app.userInteractionLevel = UserInteractionLevel.DONTDISPLAYALERTS;
 
@@ -1427,34 +1586,90 @@ function sizerProcessSelected(payloadJson){
             var item = SIZER_HOST_STATE.items[rowIndex];
             var nextRow = null;
             try {
-                var previousRow = SIZER_HOST_STATE.rows[rowIndex];
-                if (previousRow && previousRow.outputFsPath) sizerRemoveFileIfExists(previousRow.outputFsPath);
-                nextRow = sizerMeasureAndMaybeExport(item, settings, exportFolder);
+                nextRow = sizerSizeItem(item, settings, rowIndex);
             } catch (eRow) {
-                nextRow = sizerPrepareStatusRow(item, "PROCESS_ERROR", eRow && eRow.message ? eRow.message : String(eRow));
+                sizerLog("error", "Size row failed: " + sizerErrorMessage(eRow), rowIndex, item.file);
+                nextRow = sizerPrepareStatusRow(item, "PROCESS_ERROR", sizerErrorMessage(eRow));
             }
             SIZER_HOST_STATE.rows[rowIndex] = nextRow;
             if (nextRow && nextRow.inspectSourcePath) {
                 try { sizerOpenSourceForInspectionPath(nextRow.inspectSourcePath); } catch (eInspectOpen) {}
             }
             processed++;
-            if (nextRow.outputFsPath) exported++;
-            else skipped++;
+            if (!nextRow || nextRow.status === "MISSING_FILE") skipped++;
         }
 
         SIZER_HOST_STATE.lastRun = {
             scannedAt: SIZER_HOST_STATE.lastRun ? SIZER_HOST_STATE.lastRun.scannedAt : "",
             processed: processed,
+            exported: SIZER_HOST_STATE.lastRun ? SIZER_HOST_STATE.lastRun.exported : 0,
+            skipped: skipped,
+            selectedCount: normalizedIndexes.length,
+            missingCount: SIZER_HOST_STATE.lastRun ? SIZER_HOST_STATE.lastRun.missingCount : 0
+        };
+
+        return sizerSuccess(sizerBuildSnapshot("Selected rows sized."));
+    } catch (e) {
+        sizerLog("error", "Size selected failed: " + sizerErrorMessage(e), null, "");
+        return sizerFailure(sizerErrorMessage(e));
+    } finally {
+        app.userInteractionLevel = oldUserInteractionLevel;
+    }
+}
+
+function sizerExportSelected(payloadJson){
+    if (!SIZER_HOST_STATE.ready) return sizerFailure("Scan the folder and email first.");
+
+    var oldUserInteractionLevel = app.userInteractionLevel;
+    try {
+        var payload = sizerParsePayload(payloadJson);
+        var settings = sizerNormalizeSettings(payload.settings || SIZER_HOST_STATE.settings);
+        var normalizedIndexes = sizerNormalizeSelectedIndexes(payload.selectedIndexes || []);
+        var i;
+
+        if (!normalizedIndexes.length) return sizerFailure("Select at least one row.");
+
+        SIZER_HOST_STATE.settings = settings;
+
+        var exportFolder = new Folder(SIZER_HOST_STATE.inputFolder.fsName + "/Export");
+        ensureFolder(exportFolder);
+
+        var exported = 0;
+        var skipped = 0;
+        app.userInteractionLevel = UserInteractionLevel.DONTDISPLAYALERTS;
+
+        for (i = 0; i < normalizedIndexes.length; i++){
+            var rowIndex = normalizedIndexes[i];
+            var item = SIZER_HOST_STATE.items[rowIndex];
+            var row = SIZER_HOST_STATE.rows[rowIndex];
+            if (!item || !row) {
+                skipped++;
+                continue;
+            }
+
+            if (sizerExportItemAsIs(item, row, settings, exportFolder, rowIndex)) exported++;
+            else skipped++;
+            SIZER_HOST_STATE.rows[rowIndex] = row;
+        }
+
+        SIZER_HOST_STATE.lastRun = {
+            scannedAt: SIZER_HOST_STATE.lastRun ? SIZER_HOST_STATE.lastRun.scannedAt : "",
+            processed: SIZER_HOST_STATE.lastRun ? SIZER_HOST_STATE.lastRun.processed : 0,
             exported: exported,
             skipped: skipped,
             selectedCount: normalizedIndexes.length,
             missingCount: SIZER_HOST_STATE.lastRun ? SIZER_HOST_STATE.lastRun.missingCount : 0
         };
 
-        return sizerSuccess(sizerBuildSnapshot("Selected rows processed."));
+        return sizerSuccess(sizerBuildSnapshot("Selected rows exported."));
     } catch (e) {
-        return sizerFailure(e && e.message ? e.message : e);
+        sizerLog("error", "Export selected failed: " + sizerErrorMessage(e), null, "");
+        return sizerFailure(sizerErrorMessage(e));
     } finally {
         app.userInteractionLevel = oldUserInteractionLevel;
     }
+}
+
+function sizerProcessSelected(payloadJson){
+    return sizerSizeSelected(payloadJson);
 }

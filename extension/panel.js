@@ -11,16 +11,23 @@
     printTypeMode: document.getElementById("print-type-mode"),
     runAction: document.getElementById("run-action"),
     scanBtn: document.getElementById("scan-btn"),
+    selectAllBtn: document.getElementById("select-all-btn"),
+    selectGreenBtn: document.getElementById("select-green-btn"),
+    selectRedBtn: document.getElementById("select-red-btn"),
     selectPendingBtn: document.getElementById("select-pending-btn"),
-    selectSafeBtn: document.getElementById("select-safe-btn"),
     selectReviewBtn: document.getElementById("select-review-btn"),
+    clearSelectionBtn: document.getElementById("clear-selection-btn"),
     clearBtn: document.getElementById("clear-btn"),
     processBtn: document.getElementById("process-btn"),
+    exportBtn: document.getElementById("export-btn"),
     summaryChips: document.getElementById("summary-chips"),
     statusText: document.getElementById("status-text"),
     selectionText: document.getElementById("selection-text"),
     financialText: document.getElementById("financial-text"),
-    rowsBody: document.getElementById("rows-body")
+    rowsBody: document.getElementById("rows-body"),
+    logOutput: document.getElementById("log-output"),
+    copyLogBtn: document.getElementById("copy-log-btn"),
+    clearLogBtn: document.getElementById("clear-log-btn")
   };
 
   var state = {
@@ -28,15 +35,16 @@
     selected: {},
     busy: false,
     lastRun: null,
-    financials: null
+    financials: null,
+    logs: []
   };
 
   var PREFS_KEY = "sizerIllustratorPrefs.v1";
 
   var STATUS_META = {
     QUEUED: { detail: "Ready for measurement and export." },
-    OK: { detail: "Within tolerance and exported." },
-    CHECK: { detail: "Exported, but review the size delta." },
+    OK: { detail: "Within tolerance after sizing." },
+    CHECK: { detail: "Sized, but review the size delta." },
     "NOT OK": { detail: "Measured, but held back from export." },
     MISSING_FILE: { detail: "No matching source file was found." },
     BAD_WIDTH_HEIGHT: { detail: "Order dimensions could not be parsed." },
@@ -87,6 +95,57 @@
     return status !== "QUEUED" && !isSafeStatus(status) && status !== "NOT OK";
   }
 
+  function isRedStatus(status) {
+    return status === "NOT OK" || isBlockedStatus(status);
+  }
+
+  function timeLabel() {
+    var d = new Date();
+    function pad(n) { return n < 10 ? "0" + n : String(n); }
+    return pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+  }
+
+  function addLog(level, message, row, file) {
+    state.logs.push({
+      time: timeLabel(),
+      level: level || "info",
+      row: row || "",
+      file: file || "",
+      message: String(message || "")
+    });
+    while (state.logs.length > 250) state.logs.shift();
+    renderLog();
+  }
+
+  function formatLogLine(entry) {
+    var parts = [entry.time || "--:--:--", (entry.level || "info").toUpperCase()];
+    if (entry.row) parts.push("Row " + entry.row);
+    if (entry.file) parts.push(entry.file);
+    parts.push(entry.message || "");
+    return parts.join(" | ");
+  }
+
+  function renderLog() {
+    if (!els.logOutput) return;
+    els.logOutput.value = state.logs.map(formatLogLine).join("\n");
+    els.logOutput.scrollTop = els.logOutput.scrollHeight;
+  }
+
+  function applyHostSnapshot(data) {
+    state.rows = data.rows || [];
+    state.lastRun = data.lastRun || null;
+    state.financials = data.financials || null;
+    if (data.logs) state.logs = data.logs;
+  }
+
+  function applyHostError(error) {
+    if (error && error.hostData && error.hostData.logs) {
+      state.logs = error.hostData.logs;
+      renderLog();
+    }
+    addLog("error", error && error.message ? error.message : "Unknown error.");
+  }
+
   function escapeHtml(value) {
     return String(value == null ? "" : value)
       .replace(/&/g, "&amp;")
@@ -119,7 +178,9 @@
         }
 
         if (!parsed.ok) {
-          reject(new Error(parsed.error || "Unknown host error."));
+          var hostError = new Error(parsed.error || "Unknown host error.");
+          hostError.hostData = parsed.data || null;
+          reject(hostError);
           return;
         }
 
@@ -178,11 +239,15 @@
     state.busy = isBusy;
     [
       els.scanBtn,
+      els.selectAllBtn,
+      els.selectGreenBtn,
+      els.selectRedBtn,
       els.selectPendingBtn,
-      els.selectSafeBtn,
       els.selectReviewBtn,
+      els.clearSelectionBtn,
       els.clearBtn,
       els.processBtn,
+      els.exportBtn,
       els.browseFolder,
       els.pasteFolder,
       els.pasteEmail,
@@ -223,7 +288,8 @@
   }
 
   function updateProcessButtonLabel(selectedCount) {
-    els.processBtn.textContent = selectedCount > 0 ? "Process " + selectedCount : "Process Selected";
+    els.processBtn.textContent = selectedCount > 0 ? "Size " + selectedCount : "Size Selected";
+    els.exportBtn.textContent = selectedCount > 0 ? "Export " + selectedCount : "Export Selected";
   }
 
   function formatMoney(amount, currency) {
@@ -299,9 +365,13 @@
 
     if (!state.busy) {
       els.processBtn.disabled = !hasRows || selectedCount === 0;
+      els.exportBtn.disabled = !hasRows || selectedCount === 0;
+      els.selectAllBtn.disabled = !hasRows;
+      els.selectGreenBtn.disabled = !hasRows;
+      els.selectRedBtn.disabled = !hasRows;
       els.selectPendingBtn.disabled = !hasRows;
-      els.selectSafeBtn.disabled = !hasRows;
       els.selectReviewBtn.disabled = !hasRows;
+      els.clearSelectionBtn.disabled = !hasRows || selectedCount === 0;
       els.clearBtn.disabled = !hasRows && !els.folderPath.value && !els.emailText.value;
     }
   }
@@ -358,7 +428,6 @@
         "<td>" + (visibleIndex + 1) + "</td>",
         '<td class="file-cell"' + title + '><button class="file-link" type="button" data-open-index="' + row.index + '">' + escapeHtml(row.file) + "</button>" +
           (row.note ? '<div class="subtle-text">' + escapeHtml(row.note) + "</div>" : "") +
-          (row.outputFsPath ? '<div class="subtle-text mono">' + escapeHtml(row.outputFsPath) + "</div>" : "") +
           "</td>",
         '<td class="mono">' + escapeHtml(row.qty) + "</td>",
         '<td class="mono">' + escapeHtml(row.orderSize || "") + "</td>",
@@ -379,6 +448,7 @@
   function renderAll() {
     renderSummary();
     renderRows();
+    renderLog();
   }
 
   async function pasteIntoField(field) {
@@ -396,6 +466,23 @@
     field.focus();
     field.select();
     setStatus("Clipboard API unavailable here. Use Ctrl+V in the focused field.", true);
+  }
+
+  async function pasteIntoFieldFallbackCopy(field) {
+    var text = field ? field.value : "";
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+        setStatus("Log copied.", false);
+        return;
+      }
+    } catch (error) {}
+
+    if (field) {
+      field.focus();
+      field.select();
+    }
+    setStatus("Clipboard API unavailable here. Press Ctrl+C while the log is selected.", true);
   }
 
   async function browseForFolder() {
@@ -426,6 +513,7 @@
 
   async function runScan() {
     setBusy(true, "Scanning email and folder...");
+    addLog("info", "Scan started.");
     try {
       var data = await callHost("sizerScan", {
         folderPath: els.folderPath.value,
@@ -433,41 +521,67 @@
         settings: readSettings()
       });
 
-      state.rows = data.rows || [];
-      state.lastRun = data.lastRun || null;
-      state.financials = data.financials || null;
+      applyHostSnapshot(data);
       applyDefaultSelection();
       renderAll();
       persistPrefs();
       setStatus(data.message || "Scan completed.", false);
     } catch (error) {
+      applyHostError(error);
       setStatus(error.message, true);
     } finally {
       setBusy(false);
     }
   }
 
-  async function processSelected() {
+  async function sizeSelected() {
     var indexes = getSelectedIndexes();
     if (!indexes.length) {
       setStatus("Select at least one row first.", true);
       return;
     }
 
-    setBusy(true, "Processing selected rows...");
+    setBusy(true, "Sizing selected rows...");
+    addLog("info", "Size started for " + indexes.length + " selected row(s).");
     try {
-      var data = await callHost("sizerProcessSelected", {
+      var data = await callHost("sizerSizeSelected", {
         selectedIndexes: indexes,
         settings: readSettings()
       });
 
-      state.rows = data.rows || [];
-      state.lastRun = data.lastRun || null;
-      state.financials = data.financials || null;
+      applyHostSnapshot(data);
       renderAll();
       persistPrefs();
-      setStatus(data.message || "Selected rows processed.", false);
+      setStatus(data.message || "Selected rows sized.", false);
     } catch (error) {
+      applyHostError(error);
+      setStatus(error.message, true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function exportSelected() {
+    var indexes = getSelectedIndexes();
+    if (!indexes.length) {
+      setStatus("Select at least one row first.", true);
+      return;
+    }
+
+    setBusy(true, "Exporting selected rows...");
+    addLog("info", "Export started for " + indexes.length + " selected row(s).");
+    try {
+      var data = await callHost("sizerExportSelected", {
+        selectedIndexes: indexes,
+        settings: readSettings()
+      });
+
+      applyHostSnapshot(data);
+      renderAll();
+      persistPrefs();
+      setStatus(data.message || "Selected rows exported.", false);
+    } catch (error) {
+      applyHostError(error);
       setStatus(error.message, true);
     } finally {
       setBusy(false);
@@ -475,11 +589,12 @@
   }
 
   async function openRow(index) {
-    setBusy(true, "Opening source file...");
+    setBusy(true, "Opening row file...");
     try {
       await callHost("sizerActivateRow", { index: index });
-      setStatus("Source file activated in Illustrator.", false);
+      setStatus("Row file activated in Illustrator.", false);
     } catch (error) {
+      applyHostError(error);
       setStatus(error.message, true);
     } finally {
       setBusy(false);
@@ -496,6 +611,7 @@
     state.selected = {};
     state.lastRun = null;
     state.financials = null;
+    state.logs = [];
     els.folderPath.value = "";
     els.emailText.value = "";
     autoResizeEmail();
@@ -505,14 +621,25 @@
     setBusy(false);
   }
 
-  function selectRowsByStatus(statuses) {
+  function selectRowsByPredicate(predicate) {
     var next = {};
     state.rows.forEach(function (row) {
-      if (statuses.indexOf(row.status) >= 0 && row.isSelectable) {
+      if (row.isSelectable && predicate(row)) {
         next[row.index] = true;
       }
     });
     state.selected = next;
+    renderRows();
+  }
+
+  function selectRowsByStatus(statuses) {
+    selectRowsByPredicate(function (row) {
+      return statuses.indexOf(row.status) >= 0;
+    });
+  }
+
+  function clearSelection() {
+    state.selected = {};
     renderRows();
   }
 
@@ -528,22 +655,51 @@
     });
 
     els.scanBtn.addEventListener("click", runScan);
-    els.processBtn.addEventListener("click", processSelected);
+    els.processBtn.addEventListener("click", sizeSelected);
+    els.exportBtn.addEventListener("click", exportSelected);
     els.clearBtn.addEventListener("click", clearPanel);
+
+    els.selectAllBtn.addEventListener("click", function () {
+      selectRowsByPredicate(function () { return true; });
+      setStatus("All selectable rows selected.", false);
+    });
+
+    els.selectGreenBtn.addEventListener("click", function () {
+      selectRowsByStatus(["OK"]);
+      setStatus("Green rows selected.", false);
+    });
+
+    els.selectRedBtn.addEventListener("click", function () {
+      selectRowsByPredicate(function (row) { return isRedStatus(row.status); });
+      setStatus("Red rows selected.", false);
+    });
 
     els.selectPendingBtn.addEventListener("click", function () {
       selectRowsByStatus(["QUEUED"]);
       setStatus("Pending rows selected.", false);
     });
 
-    els.selectSafeBtn.addEventListener("click", function () {
-      selectRowsByStatus(["OK", "CHECK"]);
-      setStatus("Safe rows selected.", false);
-    });
-
     els.selectReviewBtn.addEventListener("click", function () {
       selectRowsByStatus(["CHECK", "NOT OK"]);
       setStatus("Review rows selected.", false);
+    });
+
+    els.clearSelectionBtn.addEventListener("click", function () {
+      clearSelection();
+      setStatus("Selection cleared.", false);
+    });
+
+    els.copyLogBtn.addEventListener("click", function () {
+      pasteIntoFieldFallbackCopy(els.logOutput);
+    });
+
+    els.clearLogBtn.addEventListener("click", async function () {
+      try {
+        await callHost("sizerClearLog");
+      } catch (error) {}
+      state.logs = [];
+      renderLog();
+      setStatus("Log cleared.", false);
     });
 
     els.rowsBody.addEventListener("change", function (event) {

@@ -47,7 +47,7 @@ select {
 
 .panel-shell {
   display: grid;
-  grid-template-rows: auto auto auto auto 1fr auto;
+  grid-template-rows: auto auto auto auto auto minmax(0, 1fr) auto auto;
   gap: 8px;
   min-height: 100vh;
   padding: 10px;
@@ -58,7 +58,8 @@ select {
 .settings-row,
 .toolbar,
 .status-strip,
-.table-card {
+.table-card,
+.log-panel {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--panel);
@@ -367,6 +368,38 @@ select:disabled {
   display: flex;
   justify-content: flex-end;
   padding: 0 4px 2px;
+}
+
+.log-panel {
+  padding: 8px 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--accent-2);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 8px;
+}
+
+.log-output {
+  width: 100%;
+  height: 72px;
+  resize: none;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(20, 16, 13, 0.88);
+  color: var(--muted);
+  padding: 7px 9px;
+  outline: none;
+  line-height: 1.35;
 }
 
 .plugin-version {

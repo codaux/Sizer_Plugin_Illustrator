@@ -82,12 +82,16 @@
         <button id="clear-btn" class="ghost-btn" type="button">Clear</button>
       </div>
       <div class="toolbar-group">
+        <button id="select-all-btn" class="ghost-btn" type="button">All</button>
+        <button id="select-green-btn" class="ghost-btn" type="button">Green</button>
+        <button id="select-red-btn" class="ghost-btn" type="button">Red</button>
         <button id="select-pending-btn" class="ghost-btn" type="button">Pending</button>
-        <button id="select-safe-btn" class="ghost-btn" type="button">Safe</button>
         <button id="select-review-btn" class="ghost-btn" type="button">Review</button>
+        <button id="clear-selection-btn" class="ghost-btn" type="button">Clear Sel</button>
       </div>
       <span class="toolbar-spacer"></span>
-      <button id="process-btn" class="accent-btn" type="button">Process Selected</button>
+      <button id="process-btn" class="accent-btn" type="button">Size Selected</button>
+      <button id="export-btn" class="primary-btn" type="button">Export Selected</button>
     </section>
 
     <section class="status-strip">
@@ -126,6 +130,17 @@
           </tbody>
         </table>
       </div>
+    </section>
+
+    <section class="log-panel">
+      <div class="log-header">
+        <span>Log</span>
+        <div class="toolbar-group">
+          <button id="copy-log-btn" class="ghost-btn" type="button">Copy</button>
+          <button id="clear-log-btn" class="ghost-btn" type="button">Clear Log</button>
+        </div>
+      </div>
+      <textarea id="log-output" class="log-output mono" readonly spellcheck="false"></textarea>
     </section>
 
     <footer class="panel-footer">
