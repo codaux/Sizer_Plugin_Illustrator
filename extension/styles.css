@@ -32,6 +32,8 @@ body {
   background-repeat: no-repeat;
   color: var(--text);
   font: 11px/1.35 "Bahnschrift", "Segoe UI", sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 button,
@@ -39,6 +41,12 @@ input,
 textarea,
 select {
   font: inherit;
+}
+
+input,
+textarea {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .mono {
@@ -353,7 +361,6 @@ select:disabled {
   color: rgba(255, 221, 183, 0.42);
   font-size: 9px;
   letter-spacing: 0.1em;
-  user-select: text;
 }
 
 .table-wrap {
