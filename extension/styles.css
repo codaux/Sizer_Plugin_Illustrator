@@ -364,7 +364,7 @@ select:disabled {
 table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 700px;
+  min-width: 560px;
 }
 
 thead th {
@@ -395,8 +395,31 @@ tbody td {
   white-space: nowrap;
 }
 
+.col-select {
+  width: 34px;
+}
+
+.col-index {
+  width: 30px;
+}
+
+.col-print {
+  width: 54px;
+}
+
+.col-qty {
+  width: 42px;
+}
+
+.col-size {
+  width: 76px;
+}
+
 .file-cell {
-  min-width: 250px;
+  min-width: 170px;
+  max-width: 320px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .file-link {
@@ -409,6 +432,9 @@ tbody td {
   text-align: left;
   font: inherit;
   font-weight: 600;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .file-link.match-problem,
@@ -425,13 +451,13 @@ tbody td {
 .size-stack {
   display: grid;
   gap: 2px;
-  min-width: 92px;
+  min-width: 72px;
 }
 
 .size-stack div {
   display: grid;
-  grid-template-columns: 14px minmax(0, 1fr);
-  gap: 5px;
+  grid-template-columns: 12px minmax(0, 1fr);
+  gap: 4px;
   align-items: baseline;
   line-height: 1.2;
 }
@@ -472,7 +498,7 @@ tbody td {
   display: inline-flex;
   align-items: center;
   width: fit-content;
-  padding: 3px 7px;
+  padding: 3px 6px;
   border-radius: 999px;
   font-size: 8px;
   font-weight: 700;

@@ -393,8 +393,7 @@
     var detail = row.statusNote || ((STATUS_META[key] && STATUS_META[key].detail) || "");
     return [
       '<div class="cell-stack">',
-      '<span class="status-pill status-' + statusClass + '">' + escapeHtml(key) + "</span>",
-      (detail ? '<div class="subtle-text">' + escapeHtml(detail) + "</div>" : ""),
+      '<span class="status-pill status-' + statusClass + '"' + (detail ? ' title="' + escapeHtml(detail) + '"' : "") + ">" + escapeHtml(key) + "</span>",
       "</div>"
     ].join("");
   }
