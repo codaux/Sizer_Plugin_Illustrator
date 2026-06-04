@@ -10,42 +10,28 @@
   <main class="panel-shell">
     <section class="hero">
       <div class="hero-copy">
-        <div class="title-row">
-          <p class="eyebrow">Illustrator CEP</p>
-          <div class="workflow-strip">
-            <span class="step-chip is-active">1 Source</span>
-            <span class="step-chip">2 Scan</span>
-            <span class="step-chip">3 Review</span>
-            <span class="step-chip">4 Export</span>
-          </div>
-        </div>
+        <p class="eyebrow">Illustrator</p>
         <h1>Sizer</h1>
       </div>
-      <p class="hero-note">Match order items to source files, inspect edge cases, then export only the rows you trust.</p>
-    </section>
-
-    <section class="input-stack">
-      <label class="field-row">
-        <span class="field-label">Folder</span>
+      <div class="quick-inputs">
+        <label class="quick-field">
+          <span>Folder</span>
         <input id="folder-path" class="field-input mono" type="text" autocomplete="off" spellcheck="false" />
-        <span class="field-actions">
+          <span class="field-actions">
           <button id="browse-folder" class="ghost-btn" type="button">Browse</button>
           <button id="paste-folder" class="ghost-btn" type="button">Paste</button>
-        </span>
-      </label>
+          </span>
+        </label>
 
-      <label class="field-row">
-        <span class="field-label">Email</span>
+        <label class="quick-field">
+          <span>Email</span>
         <textarea id="email-text" class="field-input compact-textarea mono" spellcheck="false"></textarea>
-        <span class="field-actions">
+          <span class="field-actions">
           <button id="paste-email" class="ghost-btn" type="button">Paste</button>
-        </span>
-      </label>
+          </span>
+        </label>
 
-      <div class="hint-row">
-        <span class="micro-hint">Click a file name to open the source art.</span>
-        <span class="micro-hint">WeMust runs on a temp copy, not the original.</span>
-        <span class="micro-hint">Only OK and CHECK rows export.</span>
+        <button id="scan-btn" class="primary-btn" type="button">Scan</button>
       </div>
     </section>
 
@@ -73,12 +59,18 @@
         <span>Run WeMust</span>
       </label>
 
-      <div class="fixed-note">Naming: <strong>Qty___Filename</strong></div>
+      <label class="mini-field">
+        <span>Naming</span>
+        <select id="filename-format">
+          <option value="qtyFilename">Qty___Filename</option>
+          <option value="filename">Filename</option>
+          <option value="filenameQty">Filename___Qty</option>
+        </select>
+      </label>
     </section>
 
     <section class="toolbar">
       <div class="toolbar-group">
-        <button id="scan-btn" class="primary-btn" type="button">Scan</button>
         <button id="clear-btn" class="ghost-btn" type="button">Clear</button>
       </div>
       <div class="toolbar-group">
@@ -98,34 +90,28 @@
       <div id="summary-chips" class="summary-chips"></div>
       <div class="status-stack">
         <div id="selection-text" class="meta-text">No rows loaded.</div>
-        <div id="financial-text" class="meta-text"></div>
         <div id="status-text" class="status-text">Waiting for input.</div>
       </div>
     </section>
 
     <section class="table-card">
-      <div class="table-meta">
-        <span>Loose filename matching is allowed, but missing and blocked rows stay visible for review.</span>
-      </div>
-
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
               <th class="col-select">Sel</th>
               <th class="col-index">#</th>
+              <th class="col-print">Type</th>
               <th>File</th>
               <th class="col-qty">Qty</th>
               <th class="col-size">Order</th>
               <th class="col-size">Output</th>
-              <th>Match</th>
-              <th class="col-print">Print</th>
               <th>Status</th>
             </tr>
           </thead>
           <tbody id="rows-body">
             <tr class="empty-row">
-              <td colspan="9">Scan a folder and email to build the list.</td>
+              <td colspan="8">Scan a folder and email to build the list.</td>
             </tr>
           </tbody>
         </table>

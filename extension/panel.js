@@ -9,6 +9,7 @@
     pasteEmail: document.getElementById("paste-email"),
     resizeMode: document.getElementById("resize-mode"),
     printTypeMode: document.getElementById("print-type-mode"),
+    filenameFormat: document.getElementById("filename-format"),
     runAction: document.getElementById("run-action"),
     scanBtn: document.getElementById("scan-btn"),
     selectAllBtn: document.getElementById("select-all-btn"),
@@ -23,7 +24,6 @@
     summaryChips: document.getElementById("summary-chips"),
     statusText: document.getElementById("status-text"),
     selectionText: document.getElementById("selection-text"),
-    financialText: document.getElementById("financial-text"),
     rowsBody: document.getElementById("rows-body"),
     logOutput: document.getElementById("log-output"),
     copyLogBtn: document.getElementById("copy-log-btn"),
@@ -55,15 +55,6 @@
     RESIZE_FAIL: { detail: "Resize failed on one or more items." },
     FIT_ARTBOARD_FAIL: { detail: "Artboard fit did not complete." },
     PROCESS_ERROR: { detail: "Unexpected processing error." }
-  };
-
-  var MATCH_META = {
-    exact: { label: "Exact" },
-    normalized: { label: "Normalized" },
-    canonical: { label: "Canonical" },
-    ultraLoose: { label: "Loose" },
-    suggestion: { label: "Maybe" },
-    missing: { label: "Missing" }
   };
 
   function hasCepBridge() {
@@ -193,13 +184,14 @@
     return {
       resizeMode: els.resizeMode.value,
       printTypeMode: els.printTypeMode.value,
+      filenameFormat: els.filenameFormat.value,
       runWeMustAction: els.runAction.checked
     };
   }
 
   function autoResizeEmail() {
-    var minHeight = 52;
-    var maxHeight = 110;
+    var minHeight = 30;
+    var maxHeight = 30;
     els.emailText.style.height = minHeight + "px";
     els.emailText.style.height = Math.min(Math.max(els.emailText.scrollHeight, minHeight), maxHeight) + "px";
   }
@@ -224,6 +216,7 @@
       if (prefs.settings) {
         if (prefs.settings.resizeMode) els.resizeMode.value = prefs.settings.resizeMode;
         if (prefs.settings.printTypeMode) els.printTypeMode.value = prefs.settings.printTypeMode;
+        if (prefs.settings.filenameFormat) els.filenameFormat.value = prefs.settings.filenameFormat;
         els.runAction.checked = !!prefs.settings.runWeMustAction;
       }
     } catch (error) {}
@@ -253,6 +246,7 @@
       els.pasteEmail,
       els.resizeMode,
       els.printTypeMode,
+      els.filenameFormat,
       els.runAction,
       els.folderPath,
       els.emailText
@@ -301,18 +295,7 @@
   }
 
   function updateFinancialText() {
-    var f = state.financials;
-    if (!f) {
-      els.financialText.textContent = "";
-      return;
-    }
-
-    var parts = [];
-    if (!isNaN(f.subtotal)) parts.push("Subtotal " + formatMoney(f.subtotal, f.currency));
-    if (!isNaN(f.shipping)) parts.push("Shipping " + formatMoney(f.shipping, f.currency));
-    if (!isNaN(f.tax)) parts.push("HST " + formatMoney(f.tax, f.currency));
-    if (!isNaN(f.total)) parts.push("Total " + formatMoney(f.total, f.currency));
-    els.financialText.textContent = parts.join(" | ");
+    return;
   }
 
   function renderSummary() {
@@ -376,13 +359,30 @@
     }
   }
 
-  function renderMatchCell(row) {
-    var key = row.matchType || "missing";
-    var meta = MATCH_META[key] || { label: key };
+  function hasMatchIssue(row) {
+    return row && row.matchType && row.matchType !== "exact";
+  }
+
+  function renderMatchIssueNote(row) {
+    if (!hasMatchIssue(row)) return "";
+
+    if (row.matchType === "suggestion" && row.suggested) {
+      return "Maybe: " + row.suggested;
+    }
+    if (row.matchType === "missing") {
+      return row.suggested ? "Missing, maybe: " + row.suggested : "Missing match";
+    }
+    return row.match || "Name match issue";
+  }
+
+  function renderSizeStack(widthValue, heightValue, deltaValue) {
+    var hasWidth = widthValue !== "" && widthValue !== null && typeof widthValue !== "undefined";
+    var hasHeight = heightValue !== "" && heightValue !== null && typeof heightValue !== "undefined";
     return [
-      '<div class="cell-stack">',
-      '<span class="match-pill match-' + escapeHtml(key.toLowerCase()) + '">' + escapeHtml(meta.label) + "</span>",
-      '<div class="subtle-text">' + escapeHtml(row.match || "") + "</div>",
+      '<div class="size-stack mono">',
+      '<div><span>W</span><strong>' + escapeHtml(hasWidth ? widthValue : "—") + "</strong></div>",
+      '<div><span>H</span><strong>' + escapeHtml(hasHeight ? heightValue : "—") + "</strong></div>",
+      deltaValue ? '<div class="size-delta"><span>Δ</span><strong>' + escapeHtml(deltaValue) + "</strong></div>" : "",
       "</div>"
     ].join("");
   }
@@ -410,7 +410,7 @@
 
   function renderRows() {
     if (!state.rows.length) {
-      els.rowsBody.innerHTML = '<tr class="empty-row"><td colspan="9">Scan a folder and email to build the list.</td></tr>';
+      els.rowsBody.innerHTML = '<tr class="empty-row"><td colspan="8">Scan a folder and email to build the list.</td></tr>';
       updateSelectionText();
       updateFinancialText();
       return;
@@ -421,19 +421,21 @@
       var disabled = row.isSelectable ? "" : "disabled";
       var rowClass = ["data-row", row.rowClass || "", "status-" + row.status.toLowerCase().replace(/\s+/g, "-")].join(" ").trim();
       var title = row.sourcePath ? ' title="' + escapeHtml(row.sourcePath) + '"' : "";
+      var matchIssueNote = renderMatchIssueNote(row);
+      var fileLinkClass = hasMatchIssue(row) ? "file-link match-problem" : "file-link";
 
       return [
         '<tr class="' + rowClass + '" data-index="' + row.index + '">',
         '<td class="col-select"><input class="row-check" type="checkbox" data-index="' + row.index + '" ' + checked + " " + disabled + " /></td>",
         "<td>" + (visibleIndex + 1) + "</td>",
-        '<td class="file-cell"' + title + '><button class="file-link" type="button" data-open-index="' + row.index + '">' + escapeHtml(row.file) + "</button>" +
+        "<td>" + escapeHtml(row.printType || "—") + "</td>",
+        '<td class="file-cell"' + title + '><button class="' + fileLinkClass + '" type="button" data-open-index="' + row.index + '">' + escapeHtml(row.file) + "</button>" +
+          (matchIssueNote ? ' <span class="match-inline-note">(' + escapeHtml(matchIssueNote) + ")</span>" : "") +
           (row.note ? '<div class="subtle-text">' + escapeHtml(row.note) + "</div>" : "") +
           "</td>",
         '<td class="mono">' + escapeHtml(row.qty) + "</td>",
-        '<td class="mono">' + escapeHtml(row.orderSize || "") + "</td>",
-        '<td class="mono">' + escapeHtml(row.outputSize || "—") + (row.delta ? '<div class="subtle-text">' + escapeHtml(row.delta) + "</div>" : "") + "</td>",
-        "<td>" + renderMatchCell(row) + "</td>",
-        "<td>" + escapeHtml(row.printType || "—") + "</td>",
+        "<td>" + renderSizeStack(row.orderW, row.orderH, "") + "</td>",
+        "<td>" + renderSizeStack(row.outputW, row.outputH, row.delta || "") + "</td>",
         "<td>" + renderStatusCell(row) + "</td>",
         "</tr>"
       ].join("");
@@ -721,6 +723,7 @@
       els.emailText,
       els.resizeMode,
       els.printTypeMode,
+      els.filenameFormat,
       els.runAction
     ].forEach(function (el) {
       el.addEventListener("input", function () {

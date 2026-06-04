@@ -660,24 +660,13 @@ function fitArtboardToArtwork(doc, items, paddingPt){
 
 function ensureRGB(doc){
     if (!doc) return false;
-    var beforeKnown = false;
-    var beforeIsRgb = false;
     try {
-        beforeIsRgb = (doc.documentColorSpace === DocumentColorSpace.RGB);
-        beforeKnown = true;
-    } catch (eRead1) {}
-    if (beforeKnown && beforeIsRgb) return true;
+        if (doc.documentColorSpace === DocumentColorSpace.RGB) return true;
+    } catch (eRead) {}
 
-    try { app.executeMenuCommand("doc-color-rgb"); } catch (eRgb) {}
-    stabilizeIllustratorHost(80);
-
-    var afterKnown = false;
-    var afterIsRgb = false;
-    try {
-        afterIsRgb = (doc.documentColorSpace === DocumentColorSpace.RGB);
-        afterKnown = true;
-    } catch (eRead2) {}
-    if (afterKnown) return afterIsRgb;
+    // Illustrator's doc-color-rgb menu command can intermittently leave CEP with
+    // no active document on some hosts. PNG export is raster/RGB, so keep the
+    // source document open and continue instead of risking a broken batch state.
     return true;
 }
 
@@ -1064,11 +1053,12 @@ function sizerNormalizeSettings(raw){
     raw = raw || {};
     var resizeMode = raw.resizeMode === "respectHeight" ? "respectHeight" : (raw.resizeMode === "stretch" ? "stretch" : "respectWidth");
     var printTypeMode = raw.printTypeMode === "folder" ? "folder" : (raw.printTypeMode === "prefix" ? "prefix" : "none");
+    var filenameFormat = raw.filenameFormat === "filename" ? "filename" : (raw.filenameFormat === "filenameQty" ? "filenameQty" : "qtyFilename");
     return {
         resizeMode: resizeMode,
         printTypeMode: printTypeMode,
         runWeMustAction: !!raw.runWeMustAction,
-        filenameFormat: "qtyFilename"
+        filenameFormat: filenameFormat
     };
 }
 
@@ -1143,6 +1133,20 @@ function sizerGetOpenDocumentByFile(fileObj){
     return null;
 }
 
+function sizerGetActiveDocumentSafe(){
+    try { return app.activeDocument; } catch (eActive) {}
+    return null;
+}
+
+function sizerDocumentLooksOpen(doc){
+    if (!doc) return false;
+    try {
+        var name = doc.name;
+        return !!name;
+    } catch (eName) {}
+    return false;
+}
+
 function sizerActivateDocument(doc){
     if (!doc) return false;
     try {
@@ -1158,11 +1162,46 @@ function sizerActivateDocument(doc){
     return false;
 }
 
-function sizerEnsureDocumentActive(doc, reason){
-    if (!doc) throw new Error(reason || "No document reference.");
-    if (!sizerActivateDocument(doc)) throw new Error(reason || "Could not activate document.");
-    stabilizeIllustratorHost(30);
-    return doc;
+function sizerEnsureDocumentActive(doc, reason, fileObj){
+    var lastDoc = doc || null;
+    var waitMs = 60;
+
+    for (var attempt = 0; attempt < 6; attempt++){
+        var candidate = null;
+
+        if (fileObj) {
+            try { candidate = sizerGetOpenDocumentByFile(fileObj); } catch (eFind) {}
+        }
+        if (!candidate && sizerDocumentLooksOpen(lastDoc)) candidate = lastDoc;
+
+        if (candidate && sizerActivateDocument(candidate)) {
+            stabilizeIllustratorHost(waitMs);
+            var active = sizerGetActiveDocumentSafe();
+            if (active) {
+                if (!fileObj) return candidate;
+                try {
+                    if (active.fullName && active.fullName.fsName === fileObj.fsName) return active;
+                } catch (eActivePath) {}
+                try {
+                    var resolved = sizerGetOpenDocumentByFile(fileObj);
+                    if (resolved) return resolved;
+                } catch (eResolvePath) {}
+                try {
+                    if (candidate.fullName && candidate.fullName.fsName === fileObj.fsName) return candidate;
+                } catch (eCandidatePath) {}
+            }
+        }
+
+        stabilizeIllustratorHost(waitMs);
+        sleepMs(waitMs);
+        waitMs += 40;
+    }
+
+    throw new Error(reason || "Could not activate document.");
+}
+
+function sizerIsDocumentStateError(message){
+    return /there is no document|active temp document|could not activate/i.test(String(message || ""));
 }
 
 function sizerCreateTempWorkingCopy(sourceFile){
@@ -1246,12 +1285,14 @@ function sizerSizeItem(item, settings, rowIndex){
         sizerLog("info", "Size started.", rowIndex, item.file);
         tempFile = sizerCreateTempWorkingCopy(matchInfo.file);
         doc = app.open(tempFile);
-        sizerEnsureDocumentActive(doc, "Opened temp document but could not activate it.");
+        stabilizeIllustratorHost(180);
+        doc = sizerEnsureDocumentActive(doc, "Opened temp document but could not activate it.", tempFile);
 
-        sizerEnsureDocumentActive(doc, "There is no active temp document for color conversion.");
+        doc = sizerEnsureDocumentActive(doc, "There is no active temp document for document setup.", tempFile);
         ensureRGB(doc);
+        doc = sizerEnsureDocumentActive(doc, "There is no active temp document after document setup.", tempFile);
 
-        sizerEnsureDocumentActive(doc, "There is no active temp document for unlock/show.");
+        doc = sizerEnsureDocumentActive(doc, "There is no active temp document for unlock/show.", tempFile);
         if (!unlockAllArtwork(doc)){
             sizerLog("error", "Unlock failed before sizing.", rowIndex, item.file);
             return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "UNLOCK_FAIL", "Could not unlock/show all artwork in the file."), rowIndex, tempFile);
@@ -1259,22 +1300,23 @@ function sizerSizeItem(item, settings, rowIndex){
 
         if (settings.runWeMustAction){
             try {
-                sizerEnsureDocumentActive(doc, "There is no active temp document for WeMust.");
+                doc = sizerEnsureDocumentActive(doc, "There is no active temp document for WeMust.", tempFile);
                 app.doScript("WeMust", "WeMust");
             } catch (eAction) {
                 sizerLog("error", "WeMust action failed: " + sizerErrorMessage(eAction), rowIndex, item.file);
                 return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "ACTION_FAIL", "Illustrator action WeMust / WeMust failed."), rowIndex, tempFile);
             }
 
-            sizerEnsureDocumentActive(doc, "There is no active temp document after WeMust.");
+            doc = sizerEnsureDocumentActive(doc, "There is no active temp document after WeMust.", tempFile);
             if (!unlockAllArtwork(doc)){
                 sizerLog("error", "Unlock failed after WeMust.", rowIndex, item.file);
                 return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "UNLOCK_FAIL", "Could not unlock/show all artwork after running the action."), rowIndex, tempFile);
             }
         }
 
-        sizerEnsureDocumentActive(doc, "There is no active temp document for the second color conversion.");
+        doc = sizerEnsureDocumentActive(doc, "There is no active temp document for final document setup.", tempFile);
         ensureRGB(doc);
+        doc = sizerEnsureDocumentActive(doc, "There is no active temp document after final document setup.", tempFile);
 
         var artworkItems = getTopLevelArtworkItems(doc);
         var b0 = getArtworkBounds(artworkItems);
@@ -1307,7 +1349,7 @@ function sizerSizeItem(item, settings, rowIndex){
 
         artworkItems = getTopLevelArtworkItems(doc);
         if (!getArtworkBounds(artworkItems)) artworkItems = getFallbackArtworkItems(doc);
-        sizerEnsureDocumentActive(doc, "There is no active temp document for artboard fitting.");
+        doc = sizerEnsureDocumentActive(doc, "There is no active temp document for artboard fitting.", tempFile);
         if (!fitArtboardToArtwork(doc, artworkItems, ARTBOARD_PADDING_PT)) {
             sizerLog("error", "Artboard fit failed.", rowIndex, item.file);
             return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "FIT_ARTBOARD_FAIL", "The artboard could not be fitted to the detected artwork."), rowIndex, tempFile);
@@ -1597,6 +1639,11 @@ function sizerSizeSelected(payloadJson){
             }
             processed++;
             if (!nextRow || nextRow.status === "MISSING_FILE") skipped++;
+            if (nextRow && nextRow.status === "PROCESS_ERROR" && sizerIsDocumentStateError(nextRow.statusNote)) {
+                skipped += normalizedIndexes.length - i - 1;
+                sizerLog("error", "Batch stopped because Illustrator lost its active document state. Retry Size Selected after closing any stuck temp documents.", rowIndex, item.file);
+                break;
+            }
         }
 
         SIZER_HOST_STATE.lastRun = {
