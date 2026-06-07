@@ -326,11 +326,6 @@
       { label: "Exported", value: summary.exported }
     ];
 
-    if (state.lastRun) {
-      chips.push({ label: "Last Exported", value: state.lastRun.exported || 0 });
-      chips.push({ label: "Last Skipped", value: state.lastRun.skipped || 0 });
-    }
-
     chips.forEach(function (chip) {
       var node = document.createElement("div");
       node.className = "chip";
