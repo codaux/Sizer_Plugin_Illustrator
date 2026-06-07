@@ -5,8 +5,6 @@
     folderPath: document.getElementById("folder-path"),
     emailText: document.getElementById("email-text"),
     browseFolder: document.getElementById("browse-folder"),
-    pasteFolder: document.getElementById("paste-folder"),
-    pasteEmail: document.getElementById("paste-email"),
     resizeMode: document.getElementById("resize-mode"),
     printTypeMode: document.getElementById("print-type-mode"),
     filenameFormat: document.getElementById("filename-format"),
@@ -21,6 +19,7 @@
     clearBtn: document.getElementById("clear-btn"),
     processBtn: document.getElementById("process-btn"),
     exportBtn: document.getElementById("export-btn"),
+    closeTempBtn: document.getElementById("close-temp-btn"),
     summaryChips: document.getElementById("summary-chips"),
     statusText: document.getElementById("status-text"),
     selectionText: document.getElementById("selection-text"),
@@ -244,9 +243,8 @@
       els.clearBtn,
       els.processBtn,
       els.exportBtn,
+      els.closeTempBtn,
       els.browseFolder,
-      els.pasteFolder,
-      els.pasteEmail,
       els.resizeMode,
       els.printTypeMode,
       els.filenameFormat,
@@ -375,6 +373,7 @@
     if (!state.busy) {
       els.processBtn.disabled = !hasRows || selectedCount === 0;
       els.exportBtn.disabled = !hasRows || selectedCount === 0;
+      els.closeTempBtn.disabled = !hasRows || !state.rows.some(function (row) { return !!row.workFsPath; });
       els.selectAllBtn.disabled = !hasRows;
       els.selectGreenBtn.disabled = !hasRows;
       els.selectRedBtn.disabled = !hasRows;
@@ -477,23 +476,6 @@
     renderSummary();
     renderRows();
     renderLog();
-  }
-
-  async function pasteIntoField(field) {
-    try {
-      if (navigator.clipboard && navigator.clipboard.readText) {
-        field.value = await navigator.clipboard.readText();
-        if (field === els.emailText) autoResizeEmail();
-        persistPrefs();
-        syncActionAvailability();
-        setStatus("Clipboard pasted.", false);
-        return;
-      }
-    } catch (error) {}
-
-    field.focus();
-    field.select();
-    setStatus("Clipboard API unavailable here. Use Ctrl+V in the focused field.", true);
   }
 
   async function pasteIntoFieldFallbackCopy(field) {
@@ -674,6 +656,22 @@
     renderRows();
   }
 
+  async function closeTempFiles() {
+    setBusy(true, "Closing temp files...");
+    addLog("info", "Close temp files started.");
+    try {
+      var data = await callHost("sizerCloseTempFiles");
+      setActiveIndex(null, false);
+      addLog("info", "Closed " + (data.closed || 0) + " temp file(s).");
+      setStatus(data.message || "Temp files closed.", false);
+    } catch (error) {
+      applyHostError(error);
+      setStatus(error.message, true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function pollActiveRow() {
     if (state.busy || state.activePollInFlight || !state.rows.length || !hasCepBridge()) return;
 
@@ -695,17 +693,10 @@
   function bindEvents() {
     els.browseFolder.addEventListener("click", browseForFolder);
 
-    els.pasteFolder.addEventListener("click", function () {
-      pasteIntoField(els.folderPath);
-    });
-
-    els.pasteEmail.addEventListener("click", function () {
-      pasteIntoField(els.emailText);
-    });
-
     els.scanBtn.addEventListener("click", runScan);
     els.processBtn.addEventListener("click", sizeSelected);
     els.exportBtn.addEventListener("click", exportSelected);
+    els.closeTempBtn.addEventListener("click", closeTempFiles);
     els.clearBtn.addEventListener("click", clearPanel);
 
     els.selectAllBtn.addEventListener("click", function () {

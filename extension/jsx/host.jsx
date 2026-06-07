@@ -1561,6 +1561,48 @@ function sizerClearLog(){
     return sizerSuccess({ logs: [] });
 }
 
+function sizerCloseTempFiles(){
+    try {
+        if (!SIZER_HOST_STATE.ready || !SIZER_HOST_STATE.rows || !SIZER_HOST_STATE.rows.length) {
+            return sizerSuccess({ closed: 0, attempted: 0, message: "No temp files to close." });
+        }
+
+        var seen = {};
+        var paths = [];
+        var i;
+        for (i = 0; i < SIZER_HOST_STATE.rows.length; i++){
+            var row = SIZER_HOST_STATE.rows[i];
+            if (!row || !row.workFsPath) continue;
+
+            var key = sizerNormalizeFsPathForCompare(row.workFsPath);
+            if (!key || seen[key]) continue;
+            seen[key] = true;
+            paths.push(row.workFsPath);
+        }
+
+        var closed = 0;
+        var failed = 0;
+        for (i = 0; i < paths.length; i++){
+            try {
+                var fileObj = new File(paths[i]);
+                var doc = sizerGetOpenDocumentByFile(fileObj);
+                if (!doc) continue;
+                doc.close(SaveOptions.DONOTSAVECHANGES);
+                closed++;
+                stabilizeIllustratorHost(20);
+            } catch (eCloseTemp) {
+                failed++;
+            }
+        }
+
+        var msg = "Closed " + closed + " temp file(s).";
+        if (failed > 0) msg += " Failed: " + failed + ".";
+        return sizerSuccess({ closed: closed, attempted: paths.length, failed: failed, message: msg });
+    } catch (e) {
+        return sizerFailure(e && e.message ? e.message : e);
+    }
+}
+
 function sizerScan(payloadJson){
     try {
         var payload = sizerParsePayload(payloadJson);

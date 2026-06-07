@@ -9,29 +9,22 @@
 <body>
   <main class="panel-shell">
     <section class="hero">
-      <div class="hero-copy">
-        <p class="eyebrow">Illustrator</p>
-        <h1>Sizer</h1>
-      </div>
       <div class="quick-inputs">
         <label class="quick-field">
           <span>Folder</span>
         <input id="folder-path" class="field-input mono" type="text" autocomplete="off" spellcheck="false" />
           <span class="field-actions">
           <button id="browse-folder" class="ghost-btn" type="button">Browse</button>
-          <button id="paste-folder" class="ghost-btn" type="button">Paste</button>
           </span>
         </label>
 
         <label class="quick-field">
           <span>Email</span>
         <textarea id="email-text" class="field-input compact-textarea mono" spellcheck="false"></textarea>
-          <span class="field-actions">
-          <button id="paste-email" class="ghost-btn" type="button">Paste</button>
-          </span>
         </label>
 
         <button id="scan-btn" class="primary-btn" type="button">Scan</button>
+        <button id="clear-btn" class="ghost-btn" type="button">Clear</button>
       </div>
     </section>
 
@@ -71,19 +64,17 @@
 
     <section class="toolbar">
       <div class="toolbar-group">
-        <button id="clear-btn" class="ghost-btn" type="button">Clear</button>
-      </div>
-      <div class="toolbar-group">
         <button id="select-all-btn" class="ghost-btn" type="button">All</button>
         <button id="select-green-btn" class="ghost-btn" type="button">Green</button>
         <button id="select-red-btn" class="ghost-btn" type="button">Red</button>
         <button id="select-pending-btn" class="ghost-btn" type="button">Pending</button>
         <button id="select-review-btn" class="ghost-btn" type="button">Review</button>
-        <button id="clear-selection-btn" class="ghost-btn" type="button">Clear Sel</button>
+        <button id="clear-selection-btn" class="ghost-btn" type="button">None</button>
       </div>
       <span class="toolbar-spacer"></span>
       <button id="process-btn" class="accent-btn" type="button">Size Selected</button>
       <button id="export-btn" class="primary-btn" type="button">Export Selected</button>
+      <button id="close-temp-btn" class="ghost-btn" type="button">Close</button>
     </section>
 
     <section class="status-strip">
