@@ -33,13 +33,16 @@
   var state = {
     rows: [],
     selected: {},
+    activeIndex: null,
     busy: false,
+    activePollInFlight: false,
     lastRun: null,
     financials: null,
     logs: []
   };
 
   var PREFS_KEY = "sizerIllustratorPrefs.v1";
+  var ACTIVE_POLL_MS = 800;
 
   var STATUS_META = {
     QUEUED: { detail: "Ready for measurement and export." },
@@ -342,6 +345,29 @@
     return !!state.selected[index];
   }
 
+  function setActiveIndex(index, shouldScroll) {
+    var nextIndex = (typeof index === "number" && !isNaN(index)) ? index : null;
+    if (state.activeIndex === nextIndex) return;
+
+    var previous = state.activeIndex;
+    state.activeIndex = nextIndex;
+
+    if (previous !== null) {
+      var previousRow = els.rowsBody.querySelector('[data-index="' + previous + '"]');
+      if (previousRow) previousRow.classList.remove("row-active");
+    }
+
+    if (nextIndex !== null) {
+      var activeRow = els.rowsBody.querySelector('[data-index="' + nextIndex + '"]');
+      if (activeRow) {
+        activeRow.classList.add("row-active");
+        if (shouldScroll && activeRow.scrollIntoView) {
+          activeRow.scrollIntoView({ block: "nearest" });
+        }
+      }
+    }
+  }
+
   function syncActionAvailability() {
     var hasRows = state.rows.length > 0;
     var selectedCount = countSelected();
@@ -382,7 +408,7 @@
       '<div class="size-stack mono">',
       '<div><span>W</span><strong>' + escapeHtml(hasWidth ? widthValue : "—") + "</strong></div>",
       '<div><span>H</span><strong>' + escapeHtml(hasHeight ? heightValue : "—") + "</strong></div>",
-      deltaValue ? '<div class="size-delta"><span>Δ</span><strong>' + escapeHtml(deltaValue) + "</strong></div>" : "",
+      deltaValue ? '<div class="size-delta"><strong>' + escapeHtml(deltaValue) + "</strong></div>" : "",
       "</div>"
     ].join("");
   }
@@ -418,7 +444,8 @@
     var html = state.rows.map(function (row, visibleIndex) {
       var checked = rowCheckboxChecked(row.index) ? "checked" : "";
       var disabled = row.isSelectable ? "" : "disabled";
-      var rowClass = ["data-row", row.rowClass || "", "status-" + row.status.toLowerCase().replace(/\s+/g, "-")].join(" ").trim();
+      var isActive = state.activeIndex === row.index;
+      var rowClass = ["data-row", row.rowClass || "", "status-" + row.status.toLowerCase().replace(/\s+/g, "-"), isActive ? "row-active" : ""].join(" ").trim();
       var title = row.sourcePath ? ' title="' + escapeHtml(row.sourcePath) + '"' : "";
       var matchIssueNote = renderMatchIssueNote(row);
       var fileLinkClass = hasMatchIssue(row) ? "file-link match-problem" : "file-link";
@@ -523,6 +550,7 @@
       });
 
       applyHostSnapshot(data);
+      setActiveIndex(null, false);
       applyDefaultSelection();
       renderAll();
       persistPrefs();
@@ -592,7 +620,8 @@
   async function openRow(index) {
     setBusy(true, "Opening row file...");
     try {
-      await callHost("sizerActivateRow", { index: index });
+      var data = await callHost("sizerActivateRow", { index: index });
+      setActiveIndex(data && typeof data.index === "number" ? data.index : index, true);
       setStatus("Row file activated in Illustrator.", false);
     } catch (error) {
       applyHostError(error);
@@ -610,6 +639,7 @@
 
     state.rows = [];
     state.selected = {};
+    state.activeIndex = null;
     state.lastRun = null;
     state.financials = null;
     state.logs = [];
@@ -642,6 +672,24 @@
   function clearSelection() {
     state.selected = {};
     renderRows();
+  }
+
+  async function pollActiveRow() {
+    if (state.busy || state.activePollInFlight || !state.rows.length || !hasCepBridge()) return;
+
+    state.activePollInFlight = true;
+    try {
+      var data = await callHost("sizerGetActiveRow");
+      if (data && typeof data.index === "number") {
+        setActiveIndex(data.index, true);
+      } else {
+        setActiveIndex(null, false);
+      }
+    } catch (error) {
+      setActiveIndex(null, false);
+    } finally {
+      state.activePollInFlight = false;
+    }
   }
 
   function bindEvents() {
@@ -712,9 +760,12 @@
     });
 
     els.rowsBody.addEventListener("click", function (event) {
-      var fileButton = event.target.closest("[data-open-index]");
-      if (!fileButton) return;
-      openRow(parseInt(fileButton.getAttribute("data-open-index"), 10));
+      if (event.target.closest(".col-select")) return;
+
+      var row = event.target.closest(".data-row");
+      if (!row) return;
+
+      openRow(parseInt(row.getAttribute("data-index"), 10));
     });
 
     [
@@ -747,6 +798,7 @@
     try {
       await callHost("sizerPing");
       setStatus("Ready.", false);
+      window.setInterval(pollActiveRow, ACTIVE_POLL_MS);
     } catch (error) {
       setStatus(error.message, true);
     }

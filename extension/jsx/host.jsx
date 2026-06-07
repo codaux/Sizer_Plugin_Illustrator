@@ -828,6 +828,12 @@ function makeMatchSummary(orderFile, matchInfo){
     return label;
 }
 
+function formatCompactDelta(diffValue, percentValue){
+    var pct = Math.abs(percentValue);
+    if (isNaN(pct)) pct = 0;
+    return formatSigned(diffValue) + " (" + round2(pct) + "%)";
+}
+
 function makeMeasuredRow(emailFileName, qty, printType, note, price, currency, matchInfo, resizeMode, orderW, orderH, outW, outH, outputFsPath){
     var widthDiff = outW - orderW;
     var heightDiff = outH - orderH;
@@ -837,11 +843,11 @@ function makeMeasuredRow(emailFileName, qty, printType, note, price, currency, m
     var visual = buildMeasuredVisualState(resizeMode, widthPct, heightPct);
 
     if (resizeMode === "respectWidth"){
-        delta = "H " + formatSigned(heightDiff) + " in (" + formatSignedPercent(heightPct) + ")";
+        delta = formatCompactDelta(heightDiff, heightPct);
     } else if (resizeMode === "respectHeight"){
-        delta = "W " + formatSigned(widthDiff) + " in (" + formatSignedPercent(widthPct) + ")";
+        delta = formatCompactDelta(widthDiff, widthPct);
     } else {
-        delta = "W " + formatSigned(widthDiff) + " in (" + formatSignedPercent(widthPct) + ") | H " + formatSigned(heightDiff) + " in (" + formatSignedPercent(heightPct) + ")";
+        delta = formatCompactDelta(widthDiff, widthPct) + " | " + formatCompactDelta(heightDiff, heightPct);
     }
 
     return {
@@ -1162,6 +1168,54 @@ function sizerActivateDocument(doc){
     return false;
 }
 
+function sizerExecuteMenuCommandSafe(commandName){
+    try {
+        app.executeMenuCommand(commandName);
+        return true;
+    } catch (eMenuCommand) {}
+    return false;
+}
+
+function sizerEnsureTransparencyGridVisible(doc){
+    var isVisible = null;
+
+    try {
+        if (doc && doc.isTransparencyGridVisible) {
+            isVisible = doc.isTransparencyGridVisible();
+        }
+    } catch (eVisibleMethod) {
+        isVisible = null;
+    }
+
+    if (isVisible === true) return true;
+    if (isVisible === false) return sizerExecuteMenuCommandSafe("TransparencyGrid Menu Item");
+
+    try {
+        if (doc && doc.transparencyGrid) {
+            if (doc.transparencyGrid.visible === true) return true;
+            if (doc.transparencyGrid.visible === false) {
+                doc.transparencyGrid.visible = true;
+                return true;
+            }
+        }
+    } catch (eTransparencyGrid) {}
+
+    return sizerExecuteMenuCommandSafe("TransparencyGrid Menu Item");
+}
+
+function sizerPrepareDocumentForReview(doc){
+    if (!doc) return;
+
+    sizerActivateDocument(doc);
+    stabilizeIllustratorHost(30);
+    sizerExecuteMenuCommandSafe("fitin");
+    stabilizeIllustratorHost(30);
+    sizerEnsureTransparencyGridVisible(doc);
+    stabilizeIllustratorHost(30);
+    sizerExecuteMenuCommandSafe("selectall");
+    stabilizeIllustratorHost(40);
+}
+
 function sizerEnsureDocumentActive(doc, reason, fileObj){
     var lastDoc = doc || null;
     var waitMs = 60;
@@ -1376,6 +1430,7 @@ function sizerSizeItem(item, settings, rowIndex){
             ""
         );
 
+        sizerPrepareDocumentForReview(doc);
         sizerLog(measuredRow.status === "OK" ? "info" : "warn", "Size finished with status " + measuredRow.status + ".", rowIndex, item.file);
         return sizerReturnWithWorkFile(measuredRow, rowIndex, tempFile);
     } catch (eProc) {
@@ -1556,6 +1611,57 @@ function sizerScan(payloadJson){
     }
 }
 
+function sizerNormalizeFsPathForCompare(pathValue){
+    return String(pathValue || "").replace(/\\/g, "/").toLowerCase();
+}
+
+function sizerGetActiveDocumentPath(){
+    try {
+        if (!app.documents || app.documents.length < 1) return "";
+        var doc = app.activeDocument;
+        if (!doc) return "";
+        if (!doc.fullName) return "";
+        return String(doc.fullName.fsName || "");
+    } catch (eActiveDoc) {
+        return "";
+    }
+}
+
+function sizerGetActiveRow(){
+    try {
+        if (!SIZER_HOST_STATE.ready || !SIZER_HOST_STATE.rows || !SIZER_HOST_STATE.rows.length) {
+            return sizerSuccess({ index: null, file: "", fsPath: "" });
+        }
+
+        var activePath = sizerGetActiveDocumentPath();
+        var activeKey = sizerNormalizeFsPathForCompare(activePath);
+        if (!activeKey) return sizerSuccess({ index: null, file: "", fsPath: "" });
+
+        var fallbackMatch = null;
+        for (var i = 0; i < SIZER_HOST_STATE.rows.length; i++){
+            var row = SIZER_HOST_STATE.rows[i];
+            if (!row) continue;
+            var rowIndex = (typeof row.index === "number") ? row.index : i;
+
+            if (row.workFsPath && sizerNormalizeFsPathForCompare(row.workFsPath) === activeKey) {
+                return sizerSuccess({ index: rowIndex, file: row.file || "", fsPath: activePath });
+            }
+
+            if (fallbackMatch === null && row.sourcePath && sizerNormalizeFsPathForCompare(row.sourcePath) === activeKey) {
+                fallbackMatch = { row: row, index: rowIndex };
+            }
+        }
+
+        if (fallbackMatch) {
+            return sizerSuccess({ index: fallbackMatch.index, file: fallbackMatch.row.file || "", fsPath: activePath });
+        }
+
+        return sizerSuccess({ index: null, file: "", fsPath: activePath });
+    } catch (e) {
+        return sizerFailure(e && e.message ? e.message : e);
+    }
+}
+
 function sizerActivateRow(payloadJson){
     try {
         if (!SIZER_HOST_STATE.ready) return sizerFailure("Nothing is loaded yet.");
@@ -1576,6 +1682,7 @@ function sizerActivateRow(payloadJson){
                     if (workDoc) {
                         sizerActivateDocument(workDoc);
                         stabilizeIllustratorHost(60);
+                        sizerPrepareDocumentForReview(workDoc);
                         return sizerSuccess({ opened: false, file: workDoc.name, index: index });
                     }
                     targetFile = null;
@@ -1593,12 +1700,14 @@ function sizerActivateRow(payloadJson){
         if (doc) {
             sizerActivateDocument(doc);
             stabilizeIllustratorHost(60);
+            sizerPrepareDocumentForReview(doc);
             return sizerSuccess({ opened: false, file: doc.name, index: index });
         }
 
         doc = app.open(targetFile);
         stabilizeIllustratorHost(80);
         sizerActivateDocument(doc);
+        sizerPrepareDocumentForReview(doc);
         return sizerSuccess({ opened: true, file: doc.name, index: index });
     } catch (e) {
         return sizerFailure(e && e.message ? e.message : e);
