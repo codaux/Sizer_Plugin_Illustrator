@@ -37,7 +37,8 @@
     activePollInFlight: false,
     lastRun: null,
     financials: null,
-    logs: []
+    logs: [],
+    sort: null
   };
 
   var PREFS_KEY = "sizerIllustratorPrefs.v1";
@@ -338,6 +339,102 @@
     return !!state.selected[index];
   }
 
+  function originalRowNumber(row) {
+    var index = row && typeof row.index === "number" ? row.index : 0;
+    return index + 1;
+  }
+
+  function normalizeSortText(value) {
+    return String(value == null ? "" : value).toLowerCase();
+  }
+
+  function parseSortNumber(value) {
+    var n = parseFloat(String(value == null ? "" : value).replace(/,/g, ""));
+    return isNaN(n) ? null : n;
+  }
+
+  function getDeltaSortValue(row) {
+    var delta = String(row && row.delta ? row.delta : "");
+    var matches = delta.match(/-?\d+(?:\.\d+)?/g);
+    var maxAbs = null;
+
+    if (!matches) return null;
+
+    matches.forEach(function (match) {
+      var n = Math.abs(parseFloat(match));
+      if (isNaN(n)) return;
+      if (maxAbs === null || n > maxAbs) maxAbs = n;
+    });
+
+    return maxAbs;
+  }
+
+  function getSortValue(row, key) {
+    if (key === "index") return originalRowNumber(row);
+    if (key === "type") return normalizeSortText(row.printType || "");
+    if (key === "file") return normalizeSortText(row.file || "");
+    if (key === "qty") return parseSortNumber(row.qty);
+    if (key === "delta") return getDeltaSortValue(row);
+    if (key === "status") return normalizeSortText(row.status || "");
+    return "";
+  }
+
+  function compareSortValues(aValue, bValue, direction) {
+    var aEmpty = aValue === null || typeof aValue === "undefined" || aValue === "";
+    var bEmpty = bValue === null || typeof bValue === "undefined" || bValue === "";
+    var result = 0;
+
+    if (aEmpty && bEmpty) return 0;
+    if (aEmpty) return 1;
+    if (bEmpty) return -1;
+
+    if (typeof aValue === "number" && typeof bValue === "number") result = aValue - bValue;
+    else result = String(aValue).localeCompare(String(bValue));
+
+    return direction === "desc" ? result * -1 : result;
+  }
+
+  function getVisibleRows() {
+    if (!state.sort || !state.sort.key) return state.rows.slice();
+
+    var key = state.sort.key;
+    var direction = state.sort.direction;
+    return state.rows.slice().sort(function (a, b) {
+      var result = compareSortValues(getSortValue(a, key), getSortValue(b, key), direction);
+      if (result !== 0) return result;
+      return originalRowNumber(a) - originalRowNumber(b);
+    });
+  }
+
+  function updateSortHeaders() {
+    var buttons = document.querySelectorAll(".sort-header");
+    Array.prototype.forEach.call(buttons, function (button) {
+      var isActive = state.sort && state.sort.key === button.getAttribute("data-sort-key");
+      button.className = "sort-header" + (isActive ? " sort-" + state.sort.direction : "");
+      button.setAttribute("aria-sort", isActive ? (state.sort.direction === "asc" ? "ascending" : "descending") : "none");
+    });
+  }
+
+  function setSort(key) {
+    if (key === "index") {
+      state.sort = null;
+      setStatus("Original order restored.", false);
+      renderRows();
+      return;
+    }
+
+    if (state.sort && state.sort.key === key) {
+      state.sort.direction = state.sort.direction === "asc" ? "desc" : "asc";
+    } else {
+      state.sort = {
+        key: key,
+        direction: key === "delta" ? "desc" : "asc"
+      };
+    }
+
+    renderRows();
+  }
+
   function setActiveIndex(index, shouldScroll) {
     var nextIndex = (typeof index === "number" && !isNaN(index)) ? index : null;
     if (state.activeIndex === nextIndex) return;
@@ -395,6 +492,53 @@
     return row.match || "Name match issue";
   }
 
+  function getRowResizeMode(row) {
+    return row && row.resizeMode ? row.resizeMode : els.resizeMode.value;
+  }
+
+  function getNumberValue(value) {
+    var n = parseFloat(String(value == null ? "" : value).replace(/,/g, ""));
+    return isNaN(n) ? null : n;
+  }
+
+  function valuesMatch(a, b) {
+    var av = getNumberValue(a);
+    var bv = getNumberValue(b);
+    if (av === null || bv === null) return false;
+    return Math.abs(av - bv) < 0.01;
+  }
+
+  function getSizePartClass(row, part) {
+    var mode = getRowResizeMode(row);
+    var isRespect = (mode === "respectWidth" && part === "w") || (mode === "respectHeight" && part === "h");
+    var orderValue = part === "w" ? row.orderW : row.orderH;
+    var outputValue = part === "w" ? row.outputW : row.outputH;
+    var canCompare = getNumberValue(orderValue) !== null && getNumberValue(outputValue) !== null;
+    var matches = part === "w" ? valuesMatch(row.orderW, row.outputW) : valuesMatch(row.orderH, row.outputH);
+    if (isRespect && canCompare && !matches) return "size-value size-respect-mismatch";
+    return isRespect ? "size-value size-respect" : "size-value size-check";
+  }
+
+  function renderSizePair(row) {
+    return [
+      '<div class="size-pair mono">',
+      '<div class="size-pair-row">',
+      '<span class="size-axis">W</span>',
+      '<span class="' + getSizePartClass(row, "w") + '">' + escapeHtml(row.orderW || "—") + '</span>',
+      '<span class="size-arrow">/</span>',
+      '<span class="' + getSizePartClass(row, "w") + '">' + escapeHtml(row.outputW || "—") + '</span>',
+      "</div>",
+      '<div class="size-pair-row">',
+      '<span class="size-axis">H</span>',
+      '<span class="' + getSizePartClass(row, "h") + '">' + escapeHtml(row.orderH || "—") + '</span>',
+      '<span class="size-arrow">/</span>',
+      '<span class="' + getSizePartClass(row, "h") + '">' + escapeHtml(row.outputH || "—") + '</span>',
+      "</div>",
+      row.delta ? '<div class="size-pair-delta">' + escapeHtml(row.delta) + "</div>" : "",
+      "</div>"
+    ].join("");
+  }
+
   function renderSizeStack(widthValue, heightValue, deltaValue) {
     var hasWidth = widthValue !== "" && widthValue !== null && typeof widthValue !== "undefined";
     var hasHeight = heightValue !== "" && heightValue !== null && typeof heightValue !== "undefined";
@@ -432,10 +576,11 @@
       els.rowsBody.innerHTML = '<tr class="empty-row"><td colspan="8">Scan a folder and email to build the list.</td></tr>';
       updateSelectionText();
       updateFinancialText();
+      updateSortHeaders();
       return;
     }
 
-    var html = state.rows.map(function (row, visibleIndex) {
+    var html = getVisibleRows().map(function (row) {
       var checked = rowCheckboxChecked(row.index) ? "checked" : "";
       var disabled = row.isSelectable ? "" : "disabled";
       var isActive = state.activeIndex === row.index;
@@ -447,15 +592,14 @@
       return [
         '<tr class="' + rowClass + '" data-index="' + row.index + '">',
         '<td class="col-select"><input class="row-check" type="checkbox" data-index="' + row.index + '" ' + checked + " " + disabled + " /></td>",
-        "<td>" + (visibleIndex + 1) + "</td>",
+        "<td>" + originalRowNumber(row) + "</td>",
         "<td>" + escapeHtml(row.printType || "—") + "</td>",
         '<td class="file-cell"' + title + '><button class="' + fileLinkClass + '" type="button" data-open-index="' + row.index + '">' + escapeHtml(row.file) + "</button>" +
           (matchIssueNote ? ' <span class="match-inline-note">(' + escapeHtml(matchIssueNote) + ")</span>" : "") +
           (row.note ? '<div class="subtle-text">' + escapeHtml(row.note) + "</div>" : "") +
           "</td>",
         '<td class="mono">' + escapeHtml(row.qty) + "</td>",
-        "<td>" + renderSizeStack(row.orderW, row.orderH, "") + "</td>",
-        "<td>" + renderSizeStack(row.outputW, row.outputH, row.delta || "") + "</td>",
+        '<td colspan="2">' + renderSizePair(row) + "</td>",
         "<td>" + renderStatusCell(row) + "</td>",
         "</tr>"
       ].join("");
@@ -464,6 +608,7 @@
     els.rowsBody.innerHTML = html;
     updateSelectionText();
     updateFinancialText();
+    updateSortHeaders();
     syncActionAvailability();
   }
 
@@ -527,6 +672,7 @@
       });
 
       applyHostSnapshot(data);
+      state.sort = null;
       setActiveIndex(null, false);
       applyDefaultSelection();
       renderAll();
@@ -620,6 +766,7 @@
     state.lastRun = null;
     state.financials = null;
     state.logs = [];
+    state.sort = null;
     els.folderPath.value = "";
     els.emailText.value = "";
     autoResizeEmail();
@@ -745,6 +892,12 @@
       syncActionAvailability();
     });
 
+    document.querySelector("thead").addEventListener("click", function (event) {
+      var sortButton = event.target.closest(".sort-header");
+      if (!sortButton) return;
+      setSort(sortButton.getAttribute("data-sort-key"));
+    });
+
     els.rowsBody.addEventListener("click", function (event) {
       if (event.target.closest(".col-select")) return;
 
@@ -779,6 +932,7 @@
     bindEvents();
     autoResizeEmail();
     renderAll();
+    updateSortHeaders();
     syncActionAvailability();
 
     try {

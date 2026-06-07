@@ -867,6 +867,7 @@ function makeMeasuredRow(emailFileName, qty, printType, note, price, currency, m
         outputFsPath: outputFsPath || "",
         inspectSourcePath: "",
         statusNote: "",
+        resizeMode: resizeMode,
         delta: delta,
         status: visual.severity === "not_ok" ? "NOT OK" : (visual.severity === "warn" ? "CHECK" : "OK"),
         rowClass: visual.rowClass,

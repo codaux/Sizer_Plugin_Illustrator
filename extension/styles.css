@@ -422,6 +422,44 @@ thead th {
   font-size: 8px;
 }
 
+.sort-header {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0;
+  font: inherit;
+  font-weight: 700;
+  letter-spacing: inherit;
+  text-align: left;
+  text-transform: inherit;
+}
+
+.sort-header::after {
+  content: "";
+  width: 0;
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.sort-header.sort-asc::after {
+  content: "^";
+  width: auto;
+}
+
+.sort-header.sort-desc::after {
+  content: "v";
+  width: auto;
+}
+
+.sort-header:hover {
+  color: var(--text);
+}
+
 tbody td {
   padding: 8px 9px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
@@ -463,6 +501,10 @@ tbody td {
 
 .col-size {
   width: 76px;
+}
+
+.col-size-pair {
+  width: 152px;
 }
 
 .file-cell {
@@ -532,6 +574,51 @@ tbody td {
 .size-stack .size-delta strong {
   color: var(--muted);
   font-size: 10px;
+  white-space: normal;
+}
+
+.size-pair {
+  display: grid;
+  gap: 3px;
+  min-width: 150px;
+}
+
+.size-pair-row {
+  display: grid;
+  grid-template-columns: 12px minmax(34px, max-content) 8px minmax(34px, max-content);
+  gap: 4px;
+  align-items: baseline;
+  line-height: 1.2;
+}
+
+.size-axis,
+.size-arrow {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.size-value {
+  font-weight: 600;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.size-respect {
+  color: var(--muted);
+}
+
+.size-check {
+  color: var(--text);
+}
+
+.size-respect-mismatch {
+  color: var(--danger);
+}
+
+.size-pair-delta {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.25;
   white-space: normal;
 }
 

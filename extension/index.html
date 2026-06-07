@@ -91,13 +91,12 @@
           <thead>
             <tr>
               <th class="col-select">Sel</th>
-              <th class="col-index">#</th>
-              <th class="col-print">Type</th>
-              <th>File</th>
-              <th class="col-qty">Qty</th>
-              <th class="col-size">Order</th>
-              <th class="col-size">Output</th>
-              <th>Status</th>
+              <th class="col-index"><button class="sort-header" type="button" data-sort-key="index" title="Original order">#</button></th>
+              <th class="col-print"><button class="sort-header" type="button" data-sort-key="type">Type</button></th>
+              <th><button class="sort-header" type="button" data-sort-key="file">File</button></th>
+              <th class="col-qty"><button class="sort-header" type="button" data-sort-key="qty">Qty</button></th>
+              <th class="col-size-pair" colspan="2"><button class="sort-header" type="button" data-sort-key="delta" title="Sort by delta">Order / Output</button></th>
+              <th><button class="sort-header" type="button" data-sort-key="status">Status</button></th>
             </tr>
           </thead>
           <tbody id="rows-body">
