@@ -21,6 +21,33 @@
   box-sizing: border-box;
 }
 
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 221, 183, 0.28) rgba(20, 16, 13, 0.78);
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: rgba(20, 16, 13, 0.78);
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgba(255, 221, 183, 0.24);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 221, 183, 0.36);
+}
+
+*::-webkit-scrollbar-corner {
+  background: rgba(20, 16, 13, 0.78);
+}
+
 html,
 body {
   margin: 0;
@@ -55,7 +82,7 @@ textarea {
 
 .panel-shell {
   display: grid;
-  grid-template-rows: auto auto auto auto minmax(0, 1fr) auto auto;
+  grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
   gap: 8px;
   min-height: 100vh;
   padding: 10px;
@@ -355,6 +382,8 @@ select:disabled {
 
 .panel-footer {
   display: flex;
+  align-items: center;
+  gap: 10px;
   justify-content: flex-end;
   padding: 0 4px 2px;
 }
@@ -363,6 +392,26 @@ select:disabled {
   padding: 8px 10px;
   display: grid;
   gap: 6px;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: end center;
+  padding: 16px;
+  background: rgba(10, 8, 7, 0.62);
+}
+
+.modal-overlay[hidden] {
+  display: none;
+}
+
+.modal-panel {
+  width: min(560px, 100%);
+  max-height: min(360px, calc(100vh - 32px));
+  background: rgba(35, 28, 24, 0.98);
 }
 
 .log-header {
@@ -379,7 +428,7 @@ select:disabled {
 
 .log-output {
   width: 100%;
-  height: 72px;
+  height: 220px;
   resize: none;
   overflow: auto;
   border: 1px solid var(--line);
@@ -395,6 +444,23 @@ select:disabled {
   color: rgba(255, 221, 183, 0.42);
   font-size: 9px;
   letter-spacing: 0.1em;
+}
+
+.footer-link {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 221, 183, 0.6);
+  cursor: pointer;
+  font: inherit;
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  padding: 0;
+  text-transform: uppercase;
+}
+
+.footer-link:hover {
+  color: var(--accent-2);
 }
 
 .table-wrap {
@@ -447,12 +513,12 @@ thead th {
 }
 
 .sort-header.sort-asc::after {
-  content: "^";
+  content: "⯅";
   width: auto;
 }
 
 .sort-header.sort-desc::after {
-  content: "v";
+  content: "⯆";
   width: auto;
 }
 
@@ -593,8 +659,15 @@ tbody td {
 
 .size-axis,
 .size-arrow {
-  color: var(--muted);
   font-size: 8px;
+}
+
+.size-axis {
+  color: var(--muted);
+}
+
+.size-arrow {
+  color: rgba(192, 171, 152, 0.44);
 }
 
 .size-value {

@@ -24,6 +24,9 @@
     statusText: document.getElementById("status-text"),
     selectionText: document.getElementById("selection-text"),
     rowsBody: document.getElementById("rows-body"),
+    openLogBtn: document.getElementById("open-log-btn"),
+    closeLogBtn: document.getElementById("close-log-btn"),
+    logModal: document.getElementById("log-modal"),
     logOutput: document.getElementById("log-output"),
     copyLogBtn: document.getElementById("copy-log-btn"),
     clearLogBtn: document.getElementById("clear-log-btn")
@@ -525,13 +528,13 @@
       '<div class="size-pair-row">',
       '<span class="size-axis">W</span>',
       '<span class="' + getSizePartClass(row, "w") + '">' + escapeHtml(row.orderW || "—") + '</span>',
-      '<span class="size-arrow">/</span>',
+      '<span class="size-arrow">|</span>',
       '<span class="' + getSizePartClass(row, "w") + '">' + escapeHtml(row.outputW || "—") + '</span>',
       "</div>",
       '<div class="size-pair-row">',
       '<span class="size-axis">H</span>',
       '<span class="' + getSizePartClass(row, "h") + '">' + escapeHtml(row.orderH || "—") + '</span>',
-      '<span class="size-arrow">/</span>',
+      '<span class="size-arrow">|</span>',
       '<span class="' + getSizePartClass(row, "h") + '">' + escapeHtml(row.outputH || "—") + '</span>',
       "</div>",
       row.delta ? '<div class="size-pair-delta">' + escapeHtml(row.delta) + "</div>" : "",
@@ -616,6 +619,19 @@
     renderSummary();
     renderRows();
     renderLog();
+  }
+
+  function openLogModal() {
+    if (!els.logModal) return;
+    els.logModal.hidden = false;
+    renderLog();
+    if (els.logOutput) els.logOutput.focus();
+  }
+
+  function closeLogModal() {
+    if (!els.logModal) return;
+    els.logModal.hidden = true;
+    if (els.openLogBtn) els.openLogBtn.focus();
   }
 
   async function pasteIntoFieldFallbackCopy(field) {
@@ -840,6 +856,18 @@
     els.exportBtn.addEventListener("click", exportSelected);
     els.closeTempBtn.addEventListener("click", closeTempFiles);
     els.clearBtn.addEventListener("click", clearPanel);
+
+    els.openLogBtn.addEventListener("click", openLogModal);
+    els.closeLogBtn.addEventListener("click", closeLogModal);
+    els.logModal.addEventListener("click", function (event) {
+      if (event.target === els.logModal) closeLogModal();
+    });
+
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape" && els.logModal && !els.logModal.hidden) {
+        closeLogModal();
+      }
+    });
 
     els.selectAllBtn.addEventListener("click", function () {
       selectRowsByPredicate(function () { return true; });

@@ -108,21 +108,25 @@
       </div>
     </section>
 
-    <section class="log-panel">
+    <footer class="panel-footer">
+      <button id="open-log-btn" class="footer-link" type="button">Log</button>
+      <span class="plugin-version">v0.2.3</span>
+    </footer>
+  </main>
+
+  <div id="log-modal" class="modal-overlay" hidden>
+    <section class="log-panel modal-panel" role="dialog" aria-modal="true" aria-labelledby="log-modal-title">
       <div class="log-header">
-        <span>Log</span>
+        <span id="log-modal-title">Log</span>
         <div class="toolbar-group">
           <button id="copy-log-btn" class="ghost-btn" type="button">Copy</button>
           <button id="clear-log-btn" class="ghost-btn" type="button">Clear Log</button>
+          <button id="close-log-btn" class="ghost-btn" type="button">Close</button>
         </div>
       </div>
       <textarea id="log-output" class="log-output mono" readonly spellcheck="false"></textarea>
     </section>
-
-    <footer class="panel-footer">
-      <span class="plugin-version">v0.2.3</span>
-    </footer>
-  </main>
+  </div>
 
   <script src="panel.js"></script>
 </body>
