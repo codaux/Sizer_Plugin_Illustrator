@@ -53,6 +53,7 @@
     CHECK: { detail: "Sized, but review the size delta." },
     "NOT OK": { detail: "Measured, but held back from export." },
     MISSING_FILE: { detail: "No matching source file was found." },
+    MISSING_FONT: { detail: "The source file uses one or more missing fonts." },
     BAD_WIDTH_HEIGHT: { detail: "Order dimensions could not be parsed." },
     UNLOCK_FAIL: { detail: "Locked content prevented processing." },
     ACTION_FAIL: { detail: "The WeMust action failed or was unavailable." },

@@ -2,6 +2,7 @@
 
 var ARTBOARD_PADDING_PT = 1;
 var TARGET_PPI = 300;
+var REVIEW_ZOOM_SCALE = 0.8;
 
 var SIZER_HOST_STATE = {
     ready: false,
@@ -14,7 +15,8 @@ var SIZER_HOST_STATE = {
     financials: null,
     lastRun: null,
     logs: [],
-    workFiles: {}
+    workFiles: {},
+    availableFontMap: null
 };
 
 function trimStr(s){ return String(s).replace(/^\s+|\s+$/g, ""); }
@@ -90,6 +92,16 @@ function decodePercentEscapesLoose(s){
     return s.replace(/(?:%[0-9A-Fa-f]{2})+/g, function(chunk){
         try { return decodeURIComponent(chunk); } catch (e) { return chunk; }
     });
+}
+
+function decodeXmlEntitiesLoose(s){
+    s = decodeNumericEntitiesLoose(s);
+    return String(s)
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&quot;/g, '"')
+        .replace(/&apos;/g, "'");
 }
 
 function normalizeForMatch(s){
@@ -402,6 +414,170 @@ function getRelativePath(fileObj, rootFolder){
     return String(fileObj.name);
 }
 
+function sizerNormalizeFontKey(value){
+    return trimStr(String(value || "")).toLowerCase();
+}
+
+function sizerAddFontAlias(map, value){
+    var key = sizerNormalizeFontKey(value);
+    if (key) map[key] = true;
+}
+
+function sizerBuildAvailableFontMap(){
+    var map = {};
+    try {
+        for (var i = 0; i < app.textFonts.length; i++){
+            var fontObj = app.textFonts[i];
+            var name = "";
+            var family = "";
+            var style = "";
+
+            try { name = fontObj.name || ""; } catch (eName) {}
+            try { family = fontObj.family || ""; } catch (eFamily) {}
+            try { style = fontObj.style || ""; } catch (eStyle) {}
+
+            sizerAddFontAlias(map, name);
+            sizerAddFontAlias(map, family);
+            if (family && style) sizerAddFontAlias(map, family + " " + style);
+            if (name && style) sizerAddFontAlias(map, name + " " + style);
+        }
+    } catch (eFonts) {}
+    return map;
+}
+
+function sizerGetAvailableFontMapForCheck(){
+    if (SIZER_HOST_STATE.availableFontMap) return SIZER_HOST_STATE.availableFontMap;
+    return sizerBuildAvailableFontMap();
+}
+
+function sizerAddUniqueString(list, seen, value){
+    value = trimStr(String(value || ""));
+    if (!value) return;
+
+    var key = sizerNormalizeFontKey(value);
+    if (seen[key]) return;
+    seen[key] = true;
+    list.push(value);
+}
+
+function sizerCollectDocumentFontsFromXmp(doc, list, seen){
+    var xmp = "";
+    try { xmp = String(doc.XMPString || ""); } catch (eXmpRead) {}
+    if (!xmp) return;
+
+    try {
+        var xml = new XML(xmp);
+        var fontsInfo = xml.descendants("stFnt:fontName");
+        for (var i = 0; i < fontsInfo.length(); i++){
+            sizerAddUniqueString(list, seen, String(fontsInfo[i]));
+        }
+    } catch (eXml) {}
+
+    var re = /<stFnt:fontName>([\s\S]*?)<\/stFnt:fontName>/g;
+    var m;
+    while ((m = re.exec(xmp)) !== null) {
+        sizerAddUniqueString(list, seen, decodeXmlEntitiesLoose(m[1]));
+    }
+}
+
+function sizerGetTextRangeFontName(textRange){
+    var fontObj = null;
+    try {
+        fontObj = textRange.textFont;
+        if (fontObj && fontObj.name) return fontObj.name;
+    } catch (eDirectFont) {}
+
+    try {
+        fontObj = textRange.characterAttributes.textFont;
+        if (fontObj && fontObj.name) return fontObj.name;
+    } catch (eAttrFont) {}
+
+    return "";
+}
+
+function sizerCollectDocumentFontsFromText(doc, list, seen){
+    try {
+        for (var i = 0; i < doc.textFrames.length; i++){
+            var frame = doc.textFrames[i];
+            var chars = null;
+            var charCount = 0;
+            var hasContents = false;
+            try { hasContents = String(frame.contents || "").length > 0; } catch (eContents) {}
+            try {
+                chars = frame.story.textRange.characters;
+                charCount = chars.length;
+            } catch (eChars) {
+                chars = null;
+                charCount = 0;
+            }
+
+            if (chars && charCount > 0) {
+                for (var j = 0; j < charCount; j++){
+                    var charFontName = sizerGetTextRangeFontName(chars[j]);
+                    if (charFontName) {
+                        sizerAddUniqueString(list, seen, charFontName);
+                    } else {
+                        sizerAddUniqueString(list, seen, "Unknown missing font");
+                    }
+                }
+                continue;
+            }
+
+            var rangeFontName = sizerGetTextRangeFontName(frame.textRange);
+            if (rangeFontName) {
+                sizerAddUniqueString(list, seen, rangeFontName);
+            } else if (hasContents) {
+                sizerAddUniqueString(list, seen, "Unknown missing font");
+            }
+        }
+    } catch (eTextFrames) {}
+}
+
+function sizerGetDocumentFontList(doc, preferLiveText){
+    var list = [];
+    var seen = {};
+    if (preferLiveText) {
+        sizerCollectDocumentFontsFromText(doc, list, seen);
+        return list;
+    }
+    sizerCollectDocumentFontsFromXmp(doc, list, seen);
+    if (list.length) return list;
+    sizerCollectDocumentFontsFromText(doc, list, seen);
+    return list;
+}
+
+function sizerFindMissingFonts(doc, availableFontMap, preferLiveText){
+    var fonts = sizerGetDocumentFontList(doc, preferLiveText);
+    var missing = [];
+    var seenMissing = {};
+    var hasAvailableFonts = false;
+
+    for (var availableKey in availableFontMap) {
+        if (availableFontMap.hasOwnProperty(availableKey)) {
+            hasAvailableFonts = true;
+            break;
+        }
+    }
+    if (!hasAvailableFonts) return missing;
+
+    for (var i = 0; i < fonts.length; i++){
+        var key = sizerNormalizeFontKey(fonts[i]);
+        if (!key) continue;
+        if (availableFontMap[key]) continue;
+        sizerAddUniqueString(missing, seenMissing, fonts[i]);
+    }
+
+    return missing;
+}
+
+function sizerFormatMissingFontNote(missingFonts){
+    if (!missingFonts || !missingFonts.length) return "";
+
+    var shown = missingFonts.slice(0, 4).join(", ");
+    if (missingFonts.length > 4) shown += ", +" + (missingFonts.length - 4) + " more";
+    return missingFonts.length === 1 ? "Missing font: " + shown : "Missing fonts: " + shown;
+}
+
 function layerHasLockedContent(layer){
     if (!layer) return false;
     try {
@@ -448,7 +624,6 @@ function docHasLockedContent(doc){
 function unlockLayerRecursive(layer){
     if (!layer) return;
     try { layer.locked = false; } catch (eLayer) {}
-    try { layer.visible = true; } catch (eVisible) {}
 
     try {
         var sublayers = layer.layers;
@@ -462,7 +637,6 @@ function unlockAllArtwork(doc){
     if (!doc) return false;
 
     try { app.executeMenuCommand("unlockAll"); } catch (eMenu1) {}
-    try { app.executeMenuCommand("showAll"); } catch (eShowAll1) {}
     try { app.redraw(); } catch (eRedraw1) {}
 
     try {
@@ -474,12 +648,10 @@ function unlockAllArtwork(doc){
     try {
         for (var j = 0; j < doc.pageItems.length; j++){
             try { doc.pageItems[j].locked = false; } catch (ePageItemLock) {}
-            try { doc.pageItems[j].hidden = false; } catch (ePageItemHide) {}
         }
     } catch (eDocItems) {}
 
     try { app.executeMenuCommand("unlockAll"); } catch (eMenu2) {}
-    try { app.executeMenuCommand("showAll"); } catch (eShowAll2) {}
     try { app.redraw(); } catch (eRedraw2) {}
 
     return !docHasLockedContent(doc);
@@ -747,6 +919,7 @@ function getSeverityByPercent(absPct){
 
 function statusSortValue(status){
     if (status === "MISSING_FILE") return 10;
+    if (status === "MISSING_FONT") return 12;
     if (status === "QUEUED") return 15;
     if (status === "NOT OK") return 30;
     if (status === "CHECK") return 40;
@@ -1204,6 +1377,19 @@ function sizerEnsureTransparencyGridVisible(doc){
     return sizerExecuteMenuCommandSafe("TransparencyGrid Menu Item");
 }
 
+function sizerScaleActiveViewZoom(doc, scale){
+    if (!doc || !scale || scale <= 0) return false;
+
+    try {
+        var view = doc.views && doc.views.length ? doc.views[0] : null;
+        if (!view || !view.zoom) return false;
+        view.zoom = view.zoom * scale;
+        return true;
+    } catch (eZoom) {}
+
+    return false;
+}
+
 function sizerPrepareDocumentForReview(doc){
     if (!doc) return;
 
@@ -1211,6 +1397,8 @@ function sizerPrepareDocumentForReview(doc){
     stabilizeIllustratorHost(30);
     sizerExecuteMenuCommandSafe("fitin");
     stabilizeIllustratorHost(30);
+    sizerScaleActiveViewZoom(doc, REVIEW_ZOOM_SCALE);
+    stabilizeIllustratorHost(20);
     sizerEnsureTransparencyGridVisible(doc);
     stabilizeIllustratorHost(30);
     sizerExecuteMenuCommandSafe("selectall");
@@ -1306,6 +1494,19 @@ function sizerPrepareStatusRow(item, statusCode, statusNote, inspectSource){
     return row;
 }
 
+function sizerApplyStatusToExistingRow(row, item, statusCode, statusNote){
+    if (!row) return row;
+
+    var workFsPath = row.workFsPath || "";
+    var nextRow = sizerPrepareStatusRow(item, statusCode, statusNote);
+    for (var key in nextRow){
+        if (!nextRow.hasOwnProperty(key)) continue;
+        row[key] = nextRow[key];
+    }
+    if (workFsPath) row.workFsPath = workFsPath;
+    return row;
+}
+
 function sizerCanExportStatus(status){
     return status === "OK" || status === "CHECK";
 }
@@ -1321,39 +1522,77 @@ function sizerReturnWithWorkFile(row, rowIndex, tempFile){
     return row;
 }
 
+function sizerGetOpenWorkFileForRow(row){
+    if (!row || !row.workFsPath) return null;
+
+    try {
+        var fileObj = new File(row.workFsPath);
+        if (!fileObj.exists) return null;
+
+        var doc = sizerGetOpenDocumentByFile(fileObj);
+        if (!doc) return null;
+
+        return { file: fileObj, doc: doc };
+    } catch (eWorkFile) {}
+
+    return null;
+}
+
 function sizerSizeItem(item, settings, rowIndex){
     var matchInfo = item.matchInfo || { file: null, matchType: "missing", suggested: "" };
+    var reusableOpenWork = sizerGetOpenWorkFileForRow(SIZER_HOST_STATE.rows[rowIndex]);
 
     if (isNaN(item.width) || isNaN(item.height)) {
         sizerLog("error", "Size skipped: order dimensions could not be parsed.", rowIndex, item.file);
         return sizerPrepareStatusRow(item, "BAD_WIDTH_HEIGHT");
     }
-    if (!matchInfo.file || !matchInfo.file.exists) {
+    if ((!matchInfo.file || !matchInfo.file.exists) && !reusableOpenWork) {
         sizerLog("error", "Size skipped: no matched source file exists.", rowIndex, item.file);
         return sizerPrepareStatusRow(item, "MISSING_FILE");
     }
 
     var tempFile = null;
     var doc = null;
+    var availableFontMap = null;
+    var usingOpenWorkFile = false;
 
     try {
         sizerLog("info", "Size started.", rowIndex, item.file);
-        tempFile = sizerCreateTempWorkingCopy(matchInfo.file);
-        doc = app.open(tempFile);
-        stabilizeIllustratorHost(180);
-        doc = sizerEnsureDocumentActive(doc, "Opened temp document but could not activate it.", tempFile);
+        availableFontMap = sizerGetAvailableFontMapForCheck();
+        if (reusableOpenWork) {
+            tempFile = reusableOpenWork.file;
+            doc = reusableOpenWork.doc;
+            usingOpenWorkFile = true;
+            sizerLog("info", "Reusing open temp working file.", rowIndex, item.file);
+            doc = sizerEnsureDocumentActive(doc, "Open temp document could not be activated.", tempFile);
+        } else {
+            tempFile = sizerCreateTempWorkingCopy(matchInfo.file);
+            doc = app.open(tempFile);
+            stabilizeIllustratorHost(180);
+            doc = sizerEnsureDocumentActive(doc, "Opened temp document but could not activate it.", tempFile);
+        }
+
+        var missingFonts = sizerFindMissingFonts(doc, availableFontMap, usingOpenWorkFile);
+        if (missingFonts.length) {
+            var missingFontNote = sizerFormatMissingFontNote(missingFonts);
+            sizerLog("error", missingFontNote, rowIndex, item.file);
+            sizerPrepareDocumentForReview(doc);
+            return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "MISSING_FONT", missingFontNote), rowIndex, tempFile);
+        }
 
         doc = sizerEnsureDocumentActive(doc, "There is no active temp document for document setup.", tempFile);
         ensureRGB(doc);
         doc = sizerEnsureDocumentActive(doc, "There is no active temp document after document setup.", tempFile);
 
-        doc = sizerEnsureDocumentActive(doc, "There is no active temp document for unlock/show.", tempFile);
+        doc = sizerEnsureDocumentActive(doc, "There is no active temp document for unlock.", tempFile);
         if (!unlockAllArtwork(doc)){
             sizerLog("error", "Unlock failed before sizing.", rowIndex, item.file);
-            return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "UNLOCK_FAIL", "Could not unlock/show all artwork in the file."), rowIndex, tempFile);
+            return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "UNLOCK_FAIL", "Could not unlock artwork in the file."), rowIndex, tempFile);
         }
 
-        if (settings.runWeMustAction){
+        if (settings.runWeMustAction && usingOpenWorkFile){
+            sizerLog("info", "WeMust action skipped on reused temp working file.", rowIndex, item.file);
+        } else if (settings.runWeMustAction){
             try {
                 doc = sizerEnsureDocumentActive(doc, "There is no active temp document for WeMust.", tempFile);
                 app.doScript("WeMust", "WeMust");
@@ -1365,7 +1604,7 @@ function sizerSizeItem(item, settings, rowIndex){
             doc = sizerEnsureDocumentActive(doc, "There is no active temp document after WeMust.", tempFile);
             if (!unlockAllArtwork(doc)){
                 sizerLog("error", "Unlock failed after WeMust.", rowIndex, item.file);
-                return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "UNLOCK_FAIL", "Could not unlock/show all artwork after running the action."), rowIndex, tempFile);
+                return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "UNLOCK_FAIL", "Could not unlock artwork after running the action."), rowIndex, tempFile);
             }
         }
 
@@ -1495,11 +1734,21 @@ function sizerOpenDocumentForExport(item, row, rowIndex){
 function sizerExportItemAsIs(item, row, settings, exportFolder, rowIndex){
     var opened = null;
     var doc = null;
+    var availableFontMap = null;
 
     try {
+        availableFontMap = sizerGetAvailableFontMapForCheck();
         opened = sizerOpenDocumentForExport(item, row, rowIndex);
         doc = opened.doc;
         if (!doc) return false;
+
+        var missingFonts = sizerFindMissingFonts(doc, availableFontMap, opened && opened.usingWorkFile);
+        if (missingFonts.length) {
+            var missingFontNote = sizerFormatMissingFontNote(missingFonts);
+            sizerLog("error", "Export skipped. " + missingFontNote, rowIndex, item.file);
+            sizerApplyStatusToExistingRow(row, item, "MISSING_FONT", missingFontNote);
+            return false;
+        }
 
         var base = sizerBuildExportBase(item, settings);
         var destFolder = getOutputFolderByPrintType(exportFolder, settings.printTypeMode, item.printType);
@@ -1552,7 +1801,8 @@ function sizerClearState(){
         financials: null,
         lastRun: null,
         logs: [],
-        workFiles: {}
+        workFiles: {},
+        availableFontMap: null
     };
     return sizerSuccess({ cleared: true });
 }
@@ -1637,6 +1887,7 @@ function sizerScan(payloadJson){
         SIZER_HOST_STATE.financials = parseEmailFinancials(emailText, items);
         SIZER_HOST_STATE.logs = [];
         SIZER_HOST_STATE.workFiles = {};
+        SIZER_HOST_STATE.availableFontMap = sizerBuildAvailableFontMap();
         SIZER_HOST_STATE.lastRun = {
             scannedAt: (new Date()).toString(),
             processed: 0,
@@ -1718,23 +1969,16 @@ function sizerActivateRow(payloadJson){
         var matchInfo = item.matchInfo || { file: null, matchType: "missing", suggested: "" };
         var targetFile = null;
         if (row && row.workFsPath) {
-            try {
-                targetFile = new File(row.workFsPath);
-                if (targetFile.exists) {
-                    var workDoc = sizerGetOpenDocumentByFile(targetFile);
-                    if (workDoc) {
-                        sizerActivateDocument(workDoc);
-                        stabilizeIllustratorHost(60);
-                        sizerPrepareDocumentForReview(workDoc);
-                        return sizerSuccess({ opened: false, file: workDoc.name, index: index });
-                    }
-                    targetFile = null;
-                } else {
-                    targetFile = null;
-                }
-            } catch (eWorkActivate) {
-                targetFile = null;
+            var openWork = sizerGetOpenWorkFileForRow(row);
+            if (openWork && openWork.doc) {
+                sizerActivateDocument(openWork.doc);
+                stabilizeIllustratorHost(60);
+                sizerPrepareDocumentForReview(openWork.doc);
+                return sizerSuccess({ opened: false, file: openWork.doc.name, index: index });
             }
+
+            sizerLog("warn", "Temp working file is closed. Run Size again to recreate it.", index, item.file);
+            return sizerFailure("Temp working file is closed. Run Size again to recreate it.");
         }
         if (!targetFile && matchInfo.file && matchInfo.file.exists) targetFile = matchInfo.file;
         if (!targetFile || !targetFile.exists) return sizerFailure("This row does not have a matched or working file.");
