@@ -858,8 +858,10 @@ function exportPNG_Resolution(doc, destFolder, prefix, ppi, transparent, artboar
     doc.exportForScreens(destFolder, type, opt, item, prefix);
 }
 
-function renameLatestExport(destFolder, prefix, newName, extensionLower){
-    var files = destFolder.getFiles(function(f){ return f instanceof File; });
+function findLatestExportInFolder(folderObj, prefix, extensionLower){
+    if (!folderObj || !folderObj.exists) return null;
+
+    var files = folderObj.getFiles(function(f){ return f instanceof File; });
     var best = null;
     var i;
 
@@ -871,10 +873,37 @@ function renameLatestExport(destFolder, prefix, newName, extensionLower){
         }
     }
 
+    return best;
+}
+
+function moveOrRenameExportFile(sourceFile, destFolder, newName){
+    if (!sourceFile || !sourceFile.exists || !destFolder) return false;
+
+    ensureFolder(destFolder);
+    var target = new File(destFolder.fsName + "/" + newName);
+    try { if (target.exists) target.remove(); } catch (eTarget) {}
+
+    try {
+        if (sourceFile.parent && sourceFile.parent.fsName === destFolder.fsName) {
+            return sourceFile.rename(newName);
+        }
+    } catch (eSameFolder) {}
+
+    try {
+        if (sourceFile.copy(target.fsName)) {
+            try { sourceFile.remove(); } catch (eRemoveSource) {}
+            return true;
+        }
+    } catch (eCopyExport) {}
+
+    return false;
+}
+
+function renameLatestExport(destFolder, prefix, newName, extensionLower, fallbackFolder){
+    var best = findLatestExportInFolder(destFolder, prefix, extensionLower);
+    if (!best && fallbackFolder) best = findLatestExportInFolder(fallbackFolder, prefix, extensionLower);
     if (best){
-        var target = new File(destFolder.fsName + "/" + newName);
-        try { if (target.exists) target.remove(); } catch (eTarget) {}
-        best.rename(newName);
+        moveOrRenameExportFile(best, destFolder, newName);
     }
 }
 
@@ -886,7 +915,8 @@ function ensureFolder(folderObj){
 
 function getOutputFolderByPrintType(exportRoot, printTypeMode, printType){
     if (printTypeMode !== "folder") return exportRoot;
-    var bucket = printType ? printType : "Other";
+    var bucket = trimStr(printType || "") || "Other";
+    bucket = bucket.replace(/[\\\/:*?"<>|]/g, "_");
     var destFolder = new Folder(exportRoot.fsName + "/" + bucket);
     ensureFolder(destFolder);
     return destFolder;
@@ -1681,9 +1711,14 @@ function sizerSizeItem(item, settings, rowIndex){
     }
 }
 
-function sizerBuildExportBase(item, settings){
+function sizerGetExportPrintType(item, row){
+    return trimStr((row && row.printType) || (item && item.printType) || "");
+}
+
+function sizerBuildExportBase(item, row, settings){
     var base = makeBaseWithQtyOption(item.qty, stripExt(item.file), settings.filenameFormat);
-    if (settings.printTypeMode === "prefix" && item.printType) base = item.printType + "___" + base;
+    var printType = sizerGetExportPrintType(item, row);
+    if (settings.printTypeMode === "prefix" && printType) base = printType + "___" + base;
     return base;
 }
 
@@ -1750,8 +1785,9 @@ function sizerExportItemAsIs(item, row, settings, exportFolder, rowIndex){
             return false;
         }
 
-        var base = sizerBuildExportBase(item, settings);
-        var destFolder = getOutputFolderByPrintType(exportFolder, settings.printTypeMode, item.printType);
+        var exportPrintType = sizerGetExportPrintType(item, row);
+        var base = sizerBuildExportBase(item, row, settings);
+        var destFolder = getOutputFolderByPrintType(exportFolder, settings.printTypeMode, exportPrintType);
         var outputFilePath = new File(destFolder.fsName + "/" + base + ".png").fsName;
         sizerRemoveFileIfExists(outputFilePath);
 
@@ -1759,7 +1795,12 @@ function sizerExportItemAsIs(item, row, settings, exportFolder, rowIndex){
         sizerEnsureDocumentActive(doc, "There is no active document for export.");
         var ab1 = doc.artboards.getActiveArtboardIndex() + 1;
         exportPNG_Resolution(doc, destFolder, prefixPNG, TARGET_PPI, true, ab1);
-        renameLatestExport(destFolder, prefixPNG, base + ".png", "png");
+        renameLatestExport(destFolder, prefixPNG, base + ".png", "png", exportFolder);
+
+        if (!(new File(outputFilePath)).exists) {
+            sizerLog("error", "Export failed: output PNG was not found in " + destFolder.fsName, rowIndex, item.file);
+            return false;
+        }
 
         row.outputFsPath = outputFilePath;
         sizerLog("info", "Exported PNG: " + outputFilePath, rowIndex, item.file);
