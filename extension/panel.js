@@ -287,8 +287,8 @@
   }
 
   function updateProcessButtonLabel(selectedCount) {
-    els.processBtn.textContent = selectedCount > 0 ? "Size " + selectedCount : "Size Selected";
-    els.exportBtn.textContent = selectedCount > 0 ? "Export " + selectedCount : "Export Selected";
+    els.processBtn.textContent = selectedCount > 0 ? "Size " + selectedCount : "Size";
+    els.exportBtn.textContent = selectedCount > 0 ? "Export " + selectedCount : "Export";
   }
 
   function formatMoney(amount, currency) {
