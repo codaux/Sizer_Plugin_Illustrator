@@ -192,7 +192,8 @@
       resizeMode: els.resizeMode.value,
       printTypeMode: els.printTypeMode.value,
       filenameFormat: els.filenameFormat.value,
-      runWeMustAction: els.runAction.checked
+      runActionName: els.runAction.value,
+      runWeMustAction: els.runAction.value === "WeMust"
     };
   }
 
@@ -224,7 +225,7 @@
         if (prefs.settings.resizeMode) els.resizeMode.value = prefs.settings.resizeMode;
         if (prefs.settings.printTypeMode) els.printTypeMode.value = prefs.settings.printTypeMode;
         if (prefs.settings.filenameFormat) els.filenameFormat.value = prefs.settings.filenameFormat;
-        els.runAction.checked = !!prefs.settings.runWeMustAction;
+        els.runAction.value = prefs.settings.runActionName || (prefs.settings.runWeMustAction ? "WeMust" : "");
       }
     } catch (error) {}
   }
