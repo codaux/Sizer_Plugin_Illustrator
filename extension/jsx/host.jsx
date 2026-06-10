@@ -3,6 +3,8 @@
 var ARTBOARD_PADDING_PT = 1;
 var TARGET_PPI = 300;
 var REVIEW_ZOOM_SCALE = 0.8;
+var FILE_WRITE_RETRY_COUNT = 3;
+var FILE_WRITE_RETRY_DELAY_MS = 120;
 
 var SIZER_HOST_STATE = {
     ready: false,
@@ -24,6 +26,11 @@ function round2(n){ return Math.round(n * 100) / 100; }
 function roundMoney(n){ return Math.round((n + 0.0000001) * 100) / 100; }
 function pad2(n){ return (n < 10 ? "0" : "") + n; }
 function sleepMs(ms){ try { $.sleep(ms); } catch (e) {} }
+
+function escHtml(s){
+    s = (s === null || s === undefined) ? "" : String(s);
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+}
 
 function stabilizeIllustratorHost(waitMs){
     try { app.redraw(); } catch (eRedraw) {}
@@ -271,6 +278,15 @@ function parseEmailFinancials(text, items){
     };
 }
 
+function formatMoney(amount, currency){
+    if (isNaN(amount)) return "";
+    var cur = normalizeCurrencyLabel(currency);
+    var absNum = Math.abs(roundMoney(amount)).toFixed(2);
+    var sign = amount < 0 ? "-" : "";
+    if (cur === "$" || cur === "€" || cur === "£") return sign + cur + absNum;
+    return sign + cur + " " + absNum;
+}
+
 function formatResizeModeLabel(mode){
     if (mode === "respectWidth") return "Respect Width";
     if (mode === "respectHeight") return "Respect Height";
@@ -283,6 +299,17 @@ function formatPrintTypeModeLabel(mode){
     if (mode === "prefix") return "Prefix";
     if (mode === "none") return "None";
     return String(mode || "");
+}
+
+function formatFilenameFormatLabel(mode){
+    if (mode === "filename") return "Filename";
+    if (mode === "filenameQty") return "Filename___Qty";
+    return "Qty___Filename";
+}
+
+function formatActionSummary(settings){
+    if (settings && settings.runWeMustAction) return "WeMust";
+    return "None";
 }
 
 var PRINT_TYPE_RULES = [
@@ -404,14 +431,20 @@ function getFilesInFolder(folderObj){
 }
 
 function getRelativePath(fileObj, rootFolder){
-    var full = String(fileObj.fsName);
-    var root = String(rootFolder.fsName);
-    if (full.indexOf(root) === 0){
+    var full = "";
+    var root = "";
+    try {
+        full = String(fileObj.fsName).replace(/\\/g, "/");
+        root = String(rootFolder.fsName).replace(/\\/g, "/");
+    } catch (ePath) {}
+
+    if (full && root && full.toLowerCase().indexOf(root.toLowerCase()) === 0){
         var rel = full.substring(root.length);
         if (rel.charAt(0) === "\\" || rel.charAt(0) === "/") rel = rel.substring(1);
         return rel.replace(/\\/g, "/");
     }
-    return String(fileObj.name);
+    try { return String(fileObj.name); } catch (eName) {}
+    return String(fileObj || "");
 }
 
 function sizerNormalizeFontKey(value){
@@ -959,6 +992,71 @@ function ensureFolder(folderObj){
     return folderObj.exists;
 }
 
+function writeTextFile(fileObj, text){
+    var lastError = "";
+    for (var attempt = 0; attempt < FILE_WRITE_RETRY_COUNT; attempt++){
+        var opened = false;
+        try {
+            fileObj.encoding = "UTF-8";
+            if (!fileObj.open("w")) {
+                lastError = "open failed: " + fileObj.error;
+            } else {
+                opened = true;
+                if (!fileObj.write(text)) {
+                    lastError = "write failed: " + fileObj.error;
+                    try { fileObj.close(); } catch (eWriteClose) {}
+                    opened = false;
+                } else if (!fileObj.close()) {
+                    lastError = "close failed: " + fileObj.error;
+                    opened = false;
+                } else {
+                    return { ok: true, error: "" };
+                }
+            }
+        } catch (eWrite) {
+            lastError = sizerErrorMessage(eWrite);
+            if (opened) { try { fileObj.close(); } catch (eClose) {} }
+        }
+        if (attempt < FILE_WRITE_RETRY_COUNT - 1) sleepMs(FILE_WRITE_RETRY_DELAY_MS);
+    }
+    return { ok: false, error: lastError || "write failed" };
+}
+
+function writeManagedTextFile(fileObj, text){
+    var primary = writeTextFile(fileObj, text);
+    if (primary.ok) return { ok: true, error: "", warning: "", path: fileObj.fsName };
+
+    var baseName = stripExt(fileObj.name);
+    var extIndex = fileObj.name.lastIndexOf(".");
+    var ext = (extIndex >= 0) ? fileObj.name.substring(extIndex) : "";
+    var stamp = makeTimestampTag();
+    var sameFolderFile = new File(fileObj.parent.fsName + "/" + baseName + "__" + stamp + ext);
+    var sameFolder = writeTextFile(sameFolderFile, text);
+    if (sameFolder.ok) {
+        return { ok: true, error: "", warning: "Primary path unavailable (" + primary.error + "). Wrote fallback report instead.", path: sameFolderFile.fsName };
+    }
+
+    var tempDir = new Folder(Folder.temp.fsName + "/Sizer_Reports");
+    ensureFolder(tempDir);
+    var tempFile = new File(tempDir.fsName + "/" + baseName + "__" + stamp + ext);
+    var tempResult = writeTextFile(tempFile, text);
+    if (tempResult.ok) {
+        return { ok: true, error: "", warning: "Primary path unavailable (" + primary.error + "). Wrote fallback report to temp instead.", path: tempFile.fsName };
+    }
+
+    return {
+        ok: false,
+        error: primary.error + " | same-folder fallback failed: " + sameFolder.error + " | temp fallback failed: " + tempResult.error,
+        warning: "",
+        path: fileObj.fsName
+    };
+}
+
+function toUrlPath(pathValue){
+    var clean = String(pathValue || "").replace(/\\/g, "/");
+    try { return encodeURI(clean); } catch (eUri) { return clean; }
+}
+
 function getOutputFolderByPrintType(exportRoot, printTypeMode, printType){
     if (printTypeMode !== "folder") return exportRoot;
     var bucket = trimStr(printType || "") || "Other";
@@ -1202,13 +1300,99 @@ function buildReportStats(reportRows){
     var stats = { exported: 0, check: 0, notOk: 0, errors: 0, queued: 0 };
     for (var i = 0; i < reportRows.length; i++){
         var row = reportRows[i];
-        if (row.status === "OK") stats.exported++;
-        else if (row.status === "CHECK") { stats.exported++; stats.check++; }
-        else if (row.status === "NOT OK") { stats.exported++; stats.notOk++; }
-        else if (row.status === "QUEUED") stats.queued++;
+        if (row.outputFsPath) stats.exported++;
+        if (row.status === "CHECK") stats.check++;
+        else if (row.status === "NOT OK") stats.notOk++;
+        else if (row.status === "QUEUED" && !row.outputFsPath) stats.queued++;
+        else if (row.status === "OK") {}
         else stats.errors++;
     }
     return stats;
+}
+
+function buildReportSizeHtml(row){
+    var orderW = row.orderW !== "" && row.orderW !== null && typeof row.orderW !== "undefined" ? row.orderW : "—";
+    var orderH = row.orderH !== "" && row.orderH !== null && typeof row.orderH !== "undefined" ? row.orderH : "—";
+    var outputW = row.outputW !== "" && row.outputW !== null && typeof row.outputW !== "undefined" ? row.outputW : "—";
+    var outputH = row.outputH !== "" && row.outputH !== null && typeof row.outputH !== "undefined" ? row.outputH : "—";
+
+    return [
+        "<div class='size-pair mono'>",
+        "<div class='size-row'><span class='axis'>W</span><span>" + escHtml(orderW) + "</span><span class='arrow'>|</span><span>" + escHtml(outputW) + "</span></div>",
+        "<div class='size-row'><span class='axis'>H</span><span>" + escHtml(orderH) + "</span><span class='arrow'>|</span><span>" + escHtml(outputH) + "</span></div>",
+        row.delta ? "<div class='size-delta'>" + escHtml(row.delta) + "</div>" : "",
+        "</div>"
+    ].join("");
+}
+
+function buildReportHtml(reportMeta, reportRows){
+    var stats = buildReportStats(reportRows);
+    var html = [];
+    html.push("<!doctype html>");
+    html.push("<html><head><meta charset='utf-8'><title>DTF Export Report</title>");
+    html.push("<style>");
+    html.push("body{font-family:Arial,Helvetica,sans-serif;font-size:13px;padding:18px;color:#1f1f1f;background:#fbfbfb;}.page{max-width:1680px;margin:0 auto;}h1{font-size:22px;margin:0 0 10px 0;}.meta,.summary{margin-bottom:12px;line-height:1.6;}.summary strong{display:inline-block;min-width:84px;}.table-wrap{max-height:86vh;overflow:auto;border:1px solid #d7d7d7;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.03);}table{border-collapse:collapse;width:100%;background:#fff;min-width:1180px;}th,td{border:1px solid #d7d7d7;padding:7px 9px;vertical-align:top;text-align:left;}th{background:#f3f3f3;position:sticky;top:0;z-index:4;cursor:pointer;white-space:nowrap;}th .sort-label{display:inline-flex;align-items:center;gap:6px;}th .sort-ind{font-size:10px;color:#666;}tr:nth-child(even) td{background:#fafafa;}.row-grow-warn td{background:#ffdede !important;}.row-grow-not-ok td{background:#ffbcbc !important;}.row-shrink-warn td{background:#ffe7cf !important;}.row-shrink-not-ok td{background:#ffc999 !important;}.row-mixed-warn td{background:#fff6b8 !important;}.row-mixed-not-ok td{background:#ffe17a !important;}.row-error td{background:#ffe7e7 !important;}.row-pending td{background:#eef2f6 !important;}.review-muted td{background:#fff !important;}.mono{font-family:Consolas,Monaco,monospace;}.thumb-link{text-decoration:none;cursor:pointer;color:inherit;}.thumb-wrap{display:inline-flex;align-items:center;justify-content:center;width:84px;height:84px;border:1px solid #cfcfcf;background:linear-gradient(135deg,#e6c1ca 0%,#f0d7dd 48%,#f8f1f3 100%);box-shadow:inset 0 0 0 1px rgba(255,255,255,.35);overflow:hidden;}.thumb-box{display:flex;align-items:center;justify-content:center;width:80px;height:80px;overflow:hidden;}.thumb-img{border:0;display:block;}.file-cell{min-width:190px;max-width:340px;word-break:break-word;overflow-wrap:anywhere;}.note-cell{min-width:160px;max-width:280px;}.review-cell{white-space:nowrap;text-align:center;}.legend{margin-bottom:12px;font-size:12px;color:#555;line-height:1.7;} .legend span{display:inline-block;margin-right:14px;padding:2px 8px;border-radius:10px;} .lg-rw{background:#ffdede;} .lg-rn{background:#ffbcbc;} .lg-sw{background:#ffe7cf;} .lg-sn{background:#ffc999;} .lg-mw{background:#fff6b8;} .lg-er{background:#ffe7e7;} .lg-pd{background:#eef2f6;}.size-pair{display:grid;gap:3px;min-width:150px;}.size-row{display:grid;grid-template-columns:12px minmax(34px,max-content) 8px minmax(34px,max-content);gap:4px;align-items:baseline;line-height:1.2;}.axis,.arrow{font-size:10px;color:#777;}.size-delta{margin-top:2px;color:#555;font-size:11px;line-height:1.25;}");
+    html.push("</style>");
+    html.push("<script language='javascript'>");
+    html.push("function fitThumb(img,maxW,maxH){try{var w=img.width||img.offsetWidth||1;var h=img.height||img.offsetHeight||1;if(!w||!h)return;var r=Math.min(maxW/w,maxH/h);img.width=Math.max(1,Math.round(w*r));img.height=Math.max(1,Math.round(h*r));}catch(e){}}");
+    html.push("var sortState={key:'',asc:true};function sortReport(key){var tbody=document.getElementById('report-body');var rows=[];for(var i=0;i<tbody.rows.length;i++)rows.push(tbody.rows[i]);if(sortState.key===key)sortState.asc=!sortState.asc;else{sortState.key=key;sortState.asc=true;}rows.sort(function(a,b){var av='',bv='',ac=0,bc=0;if(key==='status'){av=parseFloat(a.getAttribute('data-status-sort')||'999');bv=parseFloat(b.getAttribute('data-status-sort')||'999');if(av!==bv)return sortState.asc?(av-bv):(bv-av);ac=parseFloat(a.getAttribute('data-visual-sort')||'999');bc=parseFloat(b.getAttribute('data-visual-sort')||'999');if(ac!==bc)return sortState.asc?(ac-bc):(bc-ac);}else if(key==='print'){av=(a.getAttribute('data-print-sort')||'').toLowerCase();bv=(b.getAttribute('data-print-sort')||'').toLowerCase();}else if(key==='delta'){av=parseFloat(a.getAttribute('data-delta-sort')||'0');bv=parseFloat(b.getAttribute('data-delta-sort')||'0');}else if(key==='qty'){av=parseFloat(a.getAttribute('data-qty-sort')||'0');bv=parseFloat(b.getAttribute('data-qty-sort')||'0');}else if(key==='price'){av=parseFloat(a.getAttribute('data-price-sort')||'0');bv=parseFloat(b.getAttribute('data-price-sort')||'0');}else if(key==='file'){av=(a.getAttribute('data-file-sort')||'').toLowerCase();bv=(b.getAttribute('data-file-sort')||'').toLowerCase();}else return 0;if(av<bv)return sortState.asc?-1:1;if(av>bv)return sortState.asc?1:-1;var ai=parseInt(a.getAttribute('data-row-index')||'0',10);var bi=parseInt(b.getAttribute('data-row-index')||'0',10);return ai-bi;});for(var j=0;j<rows.length;j++){tbody.appendChild(rows[j]);rows[j].cells[0].innerHTML=String(j+1);}var headers=document.getElementsByTagName('th');for(var h=0;h<headers.length;h++){var k=headers[h].getAttribute('data-key');var ind=headers[h].getElementsByClassName('sort-ind');if(ind&&ind[0])ind[0].innerHTML=(k===sortState.key?(sortState.asc?'&uarr;':'&darr;'):'');}}function toggleReviewed(cb){var tr=cb;while(tr&&tr.tagName!=='TR')tr=tr.parentNode;if(!tr)return;if(cb.checked)tr.className+=' review-muted';else tr.className=tr.className.replace(/\\breview-muted\\b/g,'').replace(/\\s+/g,' ').replace(/^\\s+|\\s+$/g,'');}");
+    html.push("</script></head><body><div class='page'>");
+    html.push("<h1>DTF Export Report</h1>");
+    html.push("<div class='meta'>");
+    html.push("<div><strong>App:</strong> " + escHtml(reportMeta.appName) + "</div>");
+    html.push("<div><strong>Date:</strong> " + escHtml(reportMeta.date) + "</div>");
+    html.push("<div><strong>Mode:</strong> " + escHtml(reportMeta.resizeMode) + "</div>");
+    html.push("<div><strong>DPI:</strong> " + escHtml(reportMeta.dpi) + "</div>");
+    html.push("<div><strong>Naming:</strong> " + escHtml(reportMeta.filenameFormat) + "</div>");
+    html.push("<div><strong>Print Sort:</strong> " + escHtml(reportMeta.printTypeMode) + "</div>");
+    html.push("<div><strong>Action:</strong> " + escHtml(reportMeta.actionSummary) + "</div>");
+    html.push("<div><strong>Folder:</strong> " + escHtml(reportMeta.exportFolder) + "</div>");
+    html.push("</div><div class='summary'>");
+    html.push("<div><strong>Items:</strong> " + escHtml(reportMeta.itemsFound) + "</div>");
+    html.push("<div><strong>Exported:</strong> " + escHtml(stats.exported) + "</div>");
+    html.push("<div><strong>Check:</strong> " + escHtml(stats.check) + "</div>");
+    html.push("<div><strong>Not OK:</strong> " + escHtml(stats.notOk) + "</div>");
+    html.push("<div><strong>Queued:</strong> " + escHtml(stats.queued) + "</div>");
+    html.push("<div><strong>Errors:</strong> " + escHtml(stats.errors) + "</div></div>");
+    html.push("<div class='legend'><span class='lg-rw'>Bigger 5-10%</span><span class='lg-rn'>Bigger 10%+</span><span class='lg-sw'>Smaller 5-10%</span><span class='lg-sn'>Smaller 10%+</span><span class='lg-mw'>Mixed Stretch</span><span class='lg-er'>Error / Missing</span><span class='lg-pd'>Queued / Not Reached</span></div>");
+    html.push("<div class='table-wrap'><table><thead><tr><th data-key='row'><span class='sort-label'>#<span class='sort-ind'></span></span></th><th data-key='thumb'><span class='sort-label'>Thumb<span class='sort-ind'></span></span></th><th data-key='print' onclick=\"sortReport('print')\"><span class='sort-label'>Type<span class='sort-ind'></span></span></th><th data-key='file' onclick=\"sortReport('file')\"><span class='sort-label'>File<span class='sort-ind'></span></span></th><th data-key='qty' onclick=\"sortReport('qty')\"><span class='sort-label'>Qty<span class='sort-ind'></span></span></th><th data-key='price' onclick=\"sortReport('price')\"><span class='sort-label'>Price<span class='sort-ind'></span></span></th><th data-key='note'><span class='sort-label'>Note<span class='sort-ind'></span></span></th><th data-key='match'><span class='sort-label'>Match<span class='sort-ind'></span></span></th><th data-key='delta' onclick=\"sortReport('delta')\"><span class='sort-label'>Order / Output<span class='sort-ind'></span></span></th><th data-key='status' onclick=\"sortReport('status')\"><span class='sort-label'>Status<span class='sort-ind'></span></span></th><th data-key='review'><span class='sort-label'>Reviewed<span class='sort-ind'></span></span></th></tr></thead><tbody id='report-body'>");
+
+    for (var i = 0; i < reportRows.length; i++){
+        var row = reportRows[i];
+        var thumbHtml = "";
+        var fileHtml = escHtml(row.file);
+        if (row.outputFsPath) {
+            var outputUrl = toUrlPath(getRelativePath(new File(row.outputFsPath), reportMeta.exportFolderObj));
+            thumbHtml = "<a class='thumb-link' href='" + escHtml(outputUrl) + "' target='_blank'><span class='thumb-wrap'><span class='thumb-box'><img class='thumb-img' src='" + escHtml(outputUrl) + "' alt='thumb' onload='fitThumb(this,80,80)'></span></span></a>";
+            fileHtml = "<a href='" + escHtml(outputUrl) + "' target='_blank'>" + escHtml(row.file) + "</a>";
+        }
+        html.push("<tr class='" + escHtml(row.rowClass) + "' data-row-index='" + escHtml(i) + "' data-file-sort='" + escHtml((row.file || '').toLowerCase()) + "' data-qty-sort='" + escHtml(row.qty) + "' data-print-sort='" + escHtml(row.printSort || '') + "' data-price-sort='" + escHtml(isNaN(row.price) ? -1 : row.price) + "' data-delta-sort='" + escHtml(row.deltaSort || 0) + "' data-status-sort='" + escHtml(row.statusSort || 999) + "' data-visual-sort='" + escHtml(row.visualSort || 0) + "'><td>" + escHtml(i + 1) + "</td><td>" + thumbHtml + "</td><td>" + escHtml(row.printType || "—") + "</td><td class='mono file-cell'>" + fileHtml + "</td><td>" + escHtml(row.qty) + "</td><td>" + escHtml(formatMoney(row.price, row.currency)) + "</td><td class='note-cell'>" + escHtml(row.note) + "</td><td>" + escHtml(row.match) + "</td><td>" + buildReportSizeHtml(row) + "</td><td>" + escHtml(row.status) + (row.statusNote ? "<div class='note-cell'>" + escHtml(row.statusNote) + "</div>" : "") + "</td><td class='review-cell'><input type='checkbox' onclick='toggleReviewed(this)'></td></tr>");
+    }
+
+    html.push("</tbody></table></div></div></body></html>");
+    return html.join("\r\n");
+}
+
+function buildReportMeta(exportFolder, settings){
+    settings = settings || {};
+    return {
+        appName: "Sizer Illustrator",
+        date: (new Date()).toString(),
+        resizeMode: formatResizeModeLabel(settings.resizeMode),
+        dpi: TARGET_PPI,
+        filenameFormat: formatFilenameFormatLabel(settings.filenameFormat),
+        printTypeMode: formatPrintTypeModeLabel(settings.printTypeMode),
+        actionSummary: formatActionSummary(settings),
+        exportFolder: exportFolder ? exportFolder.fsName : "",
+        exportFolderObj: exportFolder,
+        itemsFound: SIZER_HOST_STATE.items ? SIZER_HOST_STATE.items.length : 0
+    };
+}
+
+function writeHtmlReport(exportFolder, settings){
+    var reportMeta = buildReportMeta(exportFolder, settings);
+    var reportFile = new File(exportFolder.fsName + "/_Export_REPORT.html");
+    return writeManagedTextFile(reportFile, buildReportHtml(reportMeta, SIZER_HOST_STATE.rows || []));
 }
 
 function sizerParsePayload(jsonText){
@@ -1314,6 +1498,7 @@ function sizerNormalizeSettings(raw){
         resizeMode: resizeMode,
         printTypeMode: printTypeMode,
         runWeMustAction: !!raw.runWeMustAction,
+        runActionName: raw.runActionName || (!!raw.runWeMustAction ? "WeMust" : ""),
         filenameFormat: filenameFormat
     };
 }
@@ -2166,6 +2351,7 @@ function sizerExportSelected(payloadJson){
 
         var exported = 0;
         var skipped = 0;
+        var reportResult = null;
         app.userInteractionLevel = UserInteractionLevel.DONTDISPLAYALERTS;
 
         for (i = 0; i < normalizedIndexes.length; i++){
@@ -2182,16 +2368,27 @@ function sizerExportSelected(payloadJson){
             SIZER_HOST_STATE.rows[rowIndex] = row;
         }
 
+        reportResult = writeHtmlReport(exportFolder, settings);
+        if (reportResult.ok) {
+            sizerLog("info", "HTML report written: " + reportResult.path, null, "");
+            if (reportResult.warning) sizerLog("warn", reportResult.warning, null, "");
+        } else {
+            sizerLog("error", "HTML report failed: " + reportResult.error, null, "");
+        }
+
         SIZER_HOST_STATE.lastRun = {
             scannedAt: SIZER_HOST_STATE.lastRun ? SIZER_HOST_STATE.lastRun.scannedAt : "",
             processed: SIZER_HOST_STATE.lastRun ? SIZER_HOST_STATE.lastRun.processed : 0,
             exported: exported,
             skipped: skipped,
             selectedCount: normalizedIndexes.length,
-            missingCount: SIZER_HOST_STATE.lastRun ? SIZER_HOST_STATE.lastRun.missingCount : 0
+            missingCount: SIZER_HOST_STATE.lastRun ? SIZER_HOST_STATE.lastRun.missingCount : 0,
+            reportPath: reportResult ? reportResult.path : ""
         };
 
-        return sizerSuccess(sizerBuildSnapshot("Selected rows exported."));
+        if (!reportResult || !reportResult.ok) return sizerFailure("Selected rows exported, but HTML report could not be written: " + (reportResult ? reportResult.error : "unknown report error"));
+
+        return sizerSuccess(sizerBuildSnapshot("Selected rows exported. Report: " + reportResult.path));
     } catch (e) {
         sizerLog("error", "Export selected failed: " + sizerErrorMessage(e), null, "");
         return sizerFailure(sizerErrorMessage(e));
