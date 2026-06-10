@@ -578,8 +578,51 @@ function sizerFormatMissingFontNote(missingFonts){
     return missingFonts.length === 1 ? "Missing font: " + shown : "Missing fonts: " + shown;
 }
 
-function layerHasLockedContent(layer){
+function layerIsHidden(layer){
     if (!layer) return false;
+    try {
+        if (layer.visible === false) return true;
+    } catch (eVisible) {}
+    return false;
+}
+
+function itemHasHiddenAncestor(item){
+    var current = item;
+    var guard = 0;
+    try {
+        while (current && guard < 200){
+            if (current.typename === "Layer" && layerIsHidden(current)) return true;
+            try {
+                if (current.hidden) return true;
+            } catch (eHidden) {}
+
+            if (!current.parent || current.parent === current || current.typename === "Document") return false;
+            current = current.parent;
+            guard++;
+        }
+    } catch (eParent) {}
+    return false;
+}
+
+function itemHasLockedAncestor(item){
+    var current = item;
+    var guard = 0;
+    try {
+        while (current && guard < 200){
+            try {
+                if (current.locked) return true;
+            } catch (eLocked) {}
+
+            if (!current.parent || current.parent === current || current.typename === "Document") return false;
+            current = current.parent;
+            guard++;
+        }
+    } catch (eParent) {}
+    return false;
+}
+
+function layerHasLockedContent(layer){
+    if (!layer || layerIsHidden(layer)) return false;
     try {
         if (layer.locked) return true;
     } catch (eLayer) {}
@@ -588,7 +631,7 @@ function layerHasLockedContent(layer){
         var pageItems = layer.pageItems;
         for (var i = 0; i < pageItems.length; i++){
             try {
-                if (pageItems[i].locked) return true;
+                if (!itemHasHiddenAncestor(pageItems[i]) && pageItems[i].locked) return true;
             } catch (eItem) {}
         }
     } catch (ePageItems) {}
@@ -613,7 +656,7 @@ function docHasLockedContent(doc){
     try {
         for (var j = 0; j < doc.pageItems.length; j++){
             try {
-                if (doc.pageItems[j].locked) return true;
+                if (!itemHasHiddenAncestor(doc.pageItems[j]) && doc.pageItems[j].locked) return true;
             } catch (eDocItem) {}
         }
     } catch (eDocPageItems) {}
@@ -623,6 +666,7 @@ function docHasLockedContent(doc){
 
 function unlockLayerRecursive(layer){
     if (!layer) return;
+    if (layerIsHidden(layer)) return;
     try { layer.locked = false; } catch (eLayer) {}
 
     try {
@@ -647,7 +691,9 @@ function unlockAllArtwork(doc){
 
     try {
         for (var j = 0; j < doc.pageItems.length; j++){
-            try { doc.pageItems[j].locked = false; } catch (ePageItemLock) {}
+            try {
+                if (!itemHasHiddenAncestor(doc.pageItems[j])) doc.pageItems[j].locked = false;
+            } catch (ePageItemLock) {}
         }
     } catch (eDocItems) {}
 
@@ -660,7 +706,7 @@ function unlockAllArtwork(doc){
 function isProcessableArtworkItem(item){
     if (!item) return false;
     try {
-        if (item.locked || item.hidden) return false;
+        if (itemHasHiddenAncestor(item) || itemHasLockedAncestor(item)) return false;
     } catch (eState) {
         return false;
     }
