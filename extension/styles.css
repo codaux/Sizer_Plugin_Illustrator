@@ -183,6 +183,7 @@ textarea {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   font-size: 8px;
+  padding-left: 7px;
 }
 
 .field-label {
@@ -244,6 +245,10 @@ textarea {
   font-size: 8px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+}
+
+.mini-field span {
+  padding-left: 4px;
 }
 
 .toggle-field {
