@@ -17,6 +17,7 @@
     selectReviewBtn: document.getElementById("select-review-btn"),
     clearSelectionBtn: document.getElementById("clear-selection-btn"),
     clearBtn: document.getElementById("clear-btn"),
+    openBtn: document.getElementById("open-btn"),
     processBtn: document.getElementById("process-btn"),
     exportBtn: document.getElementById("export-btn"),
     closeTempBtn: document.getElementById("close-temp-btn"),
@@ -57,6 +58,7 @@
     BAD_WIDTH_HEIGHT: { detail: "Order dimensions could not be parsed." },
     UNLOCK_FAIL: { detail: "Locked content prevented processing." },
     ACTION_FAIL: { detail: "The WeMust action failed or was unavailable." },
+    OPEN_REQUIRED: { detail: "Open the source file before sizing or exporting." },
     NO_ARTWORK: { detail: "No visible top-level artwork was found." },
     BAD_BOUNDS: { detail: "Artwork bounds were invalid." },
     RESIZE_FAIL: { detail: "Resize failed on one or more items." },
@@ -247,6 +249,7 @@
       els.selectReviewBtn,
       els.clearSelectionBtn,
       els.clearBtn,
+      els.openBtn,
       els.processBtn,
       els.exportBtn,
       els.closeTempBtn,
@@ -291,6 +294,7 @@
   function updateProcessButtonLabel(selectedCount) {
     els.processBtn.textContent = selectedCount > 0 ? "Size " + selectedCount : "Size";
     els.exportBtn.textContent = selectedCount > 0 ? "Export " + selectedCount : "Export";
+    els.openBtn.textContent = selectedCount > 0 ? "Open " + selectedCount : "Open";
   }
 
   function formatMoney(amount, currency) {
@@ -469,6 +473,7 @@
 
     if (!state.busy) {
       els.processBtn.disabled = !hasRows || selectedCount === 0;
+      els.openBtn.disabled = !hasRows || selectedCount === 0;
       els.exportBtn.disabled = !hasRows || selectedCount === 0;
       els.closeTempBtn.disabled = !hasRows || !state.rows.some(function (row) { return !!row.workFsPath; });
       els.selectAllBtn.disabled = !hasRows;
@@ -731,6 +736,33 @@
     }
   }
 
+  async function openSelected() {
+    var indexes = getSelectedIndexes();
+    if (!indexes.length) {
+      setStatus("Select at least one row first.", true);
+      return;
+    }
+
+    setBusy(true, "Opening selected rows...");
+    addLog("info", "Open started for " + indexes.length + " selected row(s).");
+    try {
+      var data = await callHost("sizerOpenSelected", {
+        selectedIndexes: indexes,
+        settings: readSettings()
+      });
+
+      applyHostSnapshot(data);
+      renderAll();
+      persistPrefs();
+      setStatus(data.message || "Selected rows opened.", false);
+    } catch (error) {
+      applyHostError(error);
+      setStatus(error.message, true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function exportSelected() {
     var indexes = getSelectedIndexes();
     if (!indexes.length) {
@@ -817,13 +849,17 @@
   }
 
   async function closeTempFiles() {
-    setBusy(true, "Closing temp files...");
-    addLog("info", "Close temp files started.");
+    setBusy(true, "Closing open files...");
+    addLog("info", "Close open files started.");
     try {
-      var data = await callHost("sizerCloseTempFiles");
+      var data = await callHost("sizerCloseOpenFiles");
       setActiveIndex(null, false);
-      addLog("info", "Closed " + (data.closed || 0) + " temp file(s).");
-      setStatus(data.message || "Temp files closed.", false);
+      if (data && data.rows) {
+        applyHostSnapshot(data);
+        renderAll();
+      }
+      addLog("info", "Closed " + (data.closed || 0) + " open file(s) without saving.");
+      setStatus(data.message || "Open files closed.", false);
     } catch (error) {
       applyHostError(error);
       setStatus(error.message, true);
@@ -854,6 +890,7 @@
     els.browseFolder.addEventListener("click", browseForFolder);
 
     els.scanBtn.addEventListener("click", runScan);
+    els.openBtn.addEventListener("click", openSelected);
     els.processBtn.addEventListener("click", sizeSelected);
     els.exportBtn.addEventListener("click", exportSelected);
     els.closeTempBtn.addEventListener("click", closeTempFiles);

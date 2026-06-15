@@ -1094,6 +1094,7 @@ function getSeverityByPercent(absPct){
 function statusSortValue(status){
     if (status === "MISSING_FILE") return 10;
     if (status === "MISSING_FONT") return 12;
+    if (status === "OPEN_REQUIRED") return 14;
     if (status === "QUEUED") return 15;
     if (status === "NOT OK") return 30;
     if (status === "CHECK") return 40;
@@ -1705,19 +1706,7 @@ function sizerEnsureDocumentActive(doc, reason, fileObj){
 }
 
 function sizerIsDocumentStateError(message){
-    return /there is no document|active temp document|could not activate/i.test(String(message || ""));
-}
-
-function sizerCreateTempWorkingCopy(sourceFile){
-    var tempRoot = new Folder(Folder.temp.fsName + "/Sizer_AI_Work");
-    ensureFolder(tempRoot);
-    var ext = "";
-    var dot = sourceFile.name.lastIndexOf(".");
-    if (dot >= 0) ext = sourceFile.name.substring(dot);
-    var tempName = stripExt(sourceFile.name) + "__" + makeTimestampTag() + "_" + Math.floor(Math.random() * 100000) + ext;
-    var tempFile = new File(tempRoot.fsName + "/" + tempName);
-    if (!sourceFile.copy(tempFile.fsName)) throw new Error("Failed to create temp working copy.");
-    return tempFile;
+    return /there is no document|active temp document|active source document|active working document|could not activate/i.test(String(message || ""));
 }
 
 function sizerRemoveFileIfExists(filePath){
@@ -1759,12 +1748,14 @@ function sizerApplyStatusToExistingRow(row, item, statusCode, statusNote){
     if (!row) return row;
 
     var workFsPath = row.workFsPath || "";
+    var actionApplied = !!row.actionApplied;
     var nextRow = sizerPrepareStatusRow(item, statusCode, statusNote);
     for (var key in nextRow){
         if (!nextRow.hasOwnProperty(key)) continue;
         row[key] = nextRow[key];
     }
     if (workFsPath) row.workFsPath = workFsPath;
+    if (actionApplied) row.actionApplied = true;
     return row;
 }
 
@@ -1772,14 +1763,15 @@ function sizerCanExportStatus(status){
     return status === "OK" || status === "CHECK";
 }
 
-function sizerReturnWithWorkFile(row, rowIndex, tempFile){
-    if (row && tempFile) {
+function sizerReturnWithWorkFile(row, rowIndex, workFile, actionApplied){
+    if (row && workFile) {
         try {
-            row.workFsPath = tempFile.fsName;
+            row.workFsPath = workFile.fsName;
             if (!SIZER_HOST_STATE.workFiles) SIZER_HOST_STATE.workFiles = {};
-            SIZER_HOST_STATE.workFiles[String(rowIndex)] = tempFile.fsName;
+            SIZER_HOST_STATE.workFiles[String(rowIndex)] = workFile.fsName;
         } catch (eWorkPath) {}
     }
+    if (row && typeof actionApplied !== "undefined") row.actionApplied = !!actionApplied;
     return row;
 }
 
@@ -1799,79 +1791,117 @@ function sizerGetOpenWorkFileForRow(row){
     return null;
 }
 
+function sizerOpenSourceDocumentForItem(item, rowIndex, prepareForReview){
+    var matchInfo = item.matchInfo || { file: null, matchType: "missing", suggested: "" };
+    var sourceFile = matchInfo.file || null;
+    var doc = null;
+    var opened = false;
+
+    if (!sourceFile || !sourceFile.exists) {
+        sizerLog("error", "Open skipped: no matched source file exists.", rowIndex, item.file);
+        return { ok: false, opened: false, reused: false, file: null, doc: null, error: "Missing source file." };
+    }
+
+    try {
+        doc = sizerGetOpenDocumentByFile(sourceFile);
+        if (!doc) {
+            doc = app.open(sourceFile);
+            opened = true;
+            stabilizeIllustratorHost(120);
+        }
+        doc = sizerEnsureDocumentActive(doc, "Opened source document but could not activate it.", sourceFile);
+        if (prepareForReview) sizerPrepareDocumentForReview(doc);
+
+        if (SIZER_HOST_STATE.rows && SIZER_HOST_STATE.rows[rowIndex]) {
+            if (SIZER_HOST_STATE.rows[rowIndex].status === "OPEN_REQUIRED") {
+                SIZER_HOST_STATE.rows[rowIndex] = makeQueuedRow(item.file, item.qty, item.printType, item.note, item.price, item.currency, matchInfo, item.width, item.height);
+            }
+            sizerReturnWithWorkFile(SIZER_HOST_STATE.rows[rowIndex], rowIndex, sourceFile);
+        }
+
+        sizerLog("info", opened ? "Opened source file." : "Reusing already open source file.", rowIndex, item.file);
+        return { ok: true, opened: opened, reused: !opened, file: sourceFile, doc: doc, error: "" };
+    } catch (eOpen) {
+        sizerLog("error", "Open failed: " + sizerErrorMessage(eOpen), rowIndex, item.file);
+        return { ok: false, opened: opened, reused: false, file: sourceFile, doc: doc, error: sizerErrorMessage(eOpen) };
+    }
+}
+
 function sizerSizeItem(item, settings, rowIndex){
     var matchInfo = item.matchInfo || { file: null, matchType: "missing", suggested: "" };
-    var reusableOpenWork = sizerGetOpenWorkFileForRow(SIZER_HOST_STATE.rows[rowIndex]);
+    var existingRow = SIZER_HOST_STATE.rows[rowIndex];
+    var reusableOpenWork = sizerGetOpenWorkFileForRow(existingRow);
+    var sourceFile = matchInfo.file || null;
+    if (!reusableOpenWork && sourceFile && sourceFile.exists) {
+        var openSourceDoc = sizerGetOpenDocumentByFile(sourceFile);
+        if (openSourceDoc) reusableOpenWork = { file: sourceFile, doc: openSourceDoc };
+    }
 
     if (isNaN(item.width) || isNaN(item.height)) {
         sizerLog("error", "Size skipped: order dimensions could not be parsed.", rowIndex, item.file);
         return sizerPrepareStatusRow(item, "BAD_WIDTH_HEIGHT");
     }
-    if ((!matchInfo.file || !matchInfo.file.exists) && !reusableOpenWork) {
+    if ((!sourceFile || !sourceFile.exists) && !reusableOpenWork) {
         sizerLog("error", "Size skipped: no matched source file exists.", rowIndex, item.file);
         return sizerPrepareStatusRow(item, "MISSING_FILE");
     }
+    if (!reusableOpenWork) {
+        sizerLog("error", "Size skipped: source file is not open. Use Open first.", rowIndex, item.file);
+        return sizerPrepareStatusRow(item, "OPEN_REQUIRED", "Open this file before sizing.");
+    }
 
-    var tempFile = null;
+    var workFile = reusableOpenWork.file;
     var doc = null;
     var availableFontMap = null;
-    var usingOpenWorkFile = false;
+    var actionApplied = !!(existingRow && existingRow.actionApplied);
 
     try {
         sizerLog("info", "Size started.", rowIndex, item.file);
         availableFontMap = sizerGetAvailableFontMapForCheck();
-        if (reusableOpenWork) {
-            tempFile = reusableOpenWork.file;
-            doc = reusableOpenWork.doc;
-            usingOpenWorkFile = true;
-            sizerLog("info", "Reusing open temp working file.", rowIndex, item.file);
-            doc = sizerEnsureDocumentActive(doc, "Open temp document could not be activated.", tempFile);
-        } else {
-            tempFile = sizerCreateTempWorkingCopy(matchInfo.file);
-            doc = app.open(tempFile);
-            stabilizeIllustratorHost(180);
-            doc = sizerEnsureDocumentActive(doc, "Opened temp document but could not activate it.", tempFile);
-        }
+        doc = reusableOpenWork.doc;
+        sizerLog("info", "Using open source file.", rowIndex, item.file);
+        doc = sizerEnsureDocumentActive(doc, "Open source document could not be activated.", workFile);
 
-        var missingFonts = sizerFindMissingFonts(doc, availableFontMap, usingOpenWorkFile);
+        var missingFonts = sizerFindMissingFonts(doc, availableFontMap, true);
         if (missingFonts.length) {
             var missingFontNote = sizerFormatMissingFontNote(missingFonts);
             sizerLog("error", missingFontNote, rowIndex, item.file);
             sizerPrepareDocumentForReview(doc);
-            return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "MISSING_FONT", missingFontNote), rowIndex, tempFile);
+            return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "MISSING_FONT", missingFontNote), rowIndex, workFile, actionApplied);
         }
 
-        doc = sizerEnsureDocumentActive(doc, "There is no active temp document for document setup.", tempFile);
+        doc = sizerEnsureDocumentActive(doc, "There is no active source document for document setup.", workFile);
         ensureRGB(doc);
-        doc = sizerEnsureDocumentActive(doc, "There is no active temp document after document setup.", tempFile);
+        doc = sizerEnsureDocumentActive(doc, "There is no active source document after document setup.", workFile);
 
-        doc = sizerEnsureDocumentActive(doc, "There is no active temp document for unlock.", tempFile);
+        doc = sizerEnsureDocumentActive(doc, "There is no active source document for unlock.", workFile);
         if (!unlockAllArtwork(doc)){
             sizerLog("error", "Unlock failed before sizing.", rowIndex, item.file);
-            return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "UNLOCK_FAIL", "Could not unlock artwork in the file."), rowIndex, tempFile);
+            return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "UNLOCK_FAIL", "Could not unlock artwork in the file."), rowIndex, workFile, actionApplied);
         }
 
-        if (settings.runWeMustAction && usingOpenWorkFile){
-            sizerLog("info", "WeMust action skipped on reused temp working file.", rowIndex, item.file);
+        if (settings.runWeMustAction && actionApplied){
+            sizerLog("info", "WeMust action skipped because it was already applied to this open file.", rowIndex, item.file);
         } else if (settings.runWeMustAction){
             try {
-                doc = sizerEnsureDocumentActive(doc, "There is no active temp document for WeMust.", tempFile);
+                doc = sizerEnsureDocumentActive(doc, "There is no active source document for WeMust.", workFile);
                 app.doScript("WeMust", "WeMust");
+                actionApplied = true;
             } catch (eAction) {
                 sizerLog("error", "WeMust action failed: " + sizerErrorMessage(eAction), rowIndex, item.file);
-                return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "ACTION_FAIL", "Illustrator action WeMust / WeMust failed."), rowIndex, tempFile);
+                return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "ACTION_FAIL", "Illustrator action WeMust / WeMust failed."), rowIndex, workFile, actionApplied);
             }
 
-            doc = sizerEnsureDocumentActive(doc, "There is no active temp document after WeMust.", tempFile);
+            doc = sizerEnsureDocumentActive(doc, "There is no active source document after WeMust.", workFile);
             if (!unlockAllArtwork(doc)){
                 sizerLog("error", "Unlock failed after WeMust.", rowIndex, item.file);
-                return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "UNLOCK_FAIL", "Could not unlock artwork after running the action."), rowIndex, tempFile);
+                return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "UNLOCK_FAIL", "Could not unlock artwork after running the action."), rowIndex, workFile, actionApplied);
             }
         }
 
-        doc = sizerEnsureDocumentActive(doc, "There is no active temp document for final document setup.", tempFile);
+        doc = sizerEnsureDocumentActive(doc, "There is no active source document for final document setup.", workFile);
         ensureRGB(doc);
-        doc = sizerEnsureDocumentActive(doc, "There is no active temp document after final document setup.", tempFile);
+        doc = sizerEnsureDocumentActive(doc, "There is no active source document after final document setup.", workFile);
 
         var artworkItems = getTopLevelArtworkItems(doc);
         var b0 = getArtworkBounds(artworkItems);
@@ -1881,13 +1911,13 @@ function sizerSizeItem(item, settings, rowIndex){
         }
         if (!b0) {
             sizerLog("error", "No usable artwork bounds were detected.", rowIndex, item.file);
-            return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "NO_ARTWORK", "No usable artwork bounds were detected. Working file stayed open for inspection.", true), rowIndex, tempFile);
+            return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "NO_ARTWORK", "No usable artwork bounds were detected. Source file stayed open for inspection.", true), rowIndex, workFile, actionApplied);
         }
 
         var cur = boundsSizePt(b0);
         if (cur.w <= 0 || cur.h <= 0) {
             sizerLog("error", "Artwork bounds resolved to zero.", rowIndex, item.file);
-            return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "BAD_BOUNDS", "Artwork bounds were detected but width/height resolved to zero.", true), rowIndex, tempFile);
+            return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "BAD_BOUNDS", "Artwork bounds were detected but width/height resolved to zero.", true), rowIndex, workFile, actionApplied);
         }
 
         var sx = ((item.width * 72) / cur.w) * 100.0;
@@ -1899,15 +1929,15 @@ function sizerSizeItem(item, settings, rowIndex){
 
         if (!scaleResult || !scaleResult.ok) {
             sizerLog("error", "Resize failed on one or more items.", rowIndex, item.file);
-            return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "RESIZE_FAIL", "One or more artwork items failed during resize."), rowIndex, tempFile);
+            return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "RESIZE_FAIL", "One or more artwork items failed during resize."), rowIndex, workFile, actionApplied);
         }
 
         artworkItems = getTopLevelArtworkItems(doc);
         if (!getArtworkBounds(artworkItems)) artworkItems = getFallbackArtworkItems(doc);
-        doc = sizerEnsureDocumentActive(doc, "There is no active temp document for artboard fitting.", tempFile);
+        doc = sizerEnsureDocumentActive(doc, "There is no active source document for artboard fitting.", workFile);
         if (!fitArtboardToArtwork(doc, artworkItems, ARTBOARD_PADDING_PT)) {
             sizerLog("error", "Artboard fit failed.", rowIndex, item.file);
-            return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "FIT_ARTBOARD_FAIL", "The artboard could not be fitted to the detected artwork."), rowIndex, tempFile);
+            return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "FIT_ARTBOARD_FAIL", "The artboard could not be fitted to the detected artwork."), rowIndex, workFile, actionApplied);
         }
 
         var bOut = getArtworkBounds(artworkItems);
@@ -1933,10 +1963,10 @@ function sizerSizeItem(item, settings, rowIndex){
 
         sizerPrepareDocumentForReview(doc);
         sizerLog(measuredRow.status === "OK" ? "info" : "warn", "Size finished with status " + measuredRow.status + ".", rowIndex, item.file);
-        return sizerReturnWithWorkFile(measuredRow, rowIndex, tempFile);
+        return sizerReturnWithWorkFile(measuredRow, rowIndex, workFile, actionApplied);
     } catch (eProc) {
         sizerLog("error", "Size failed: " + sizerErrorMessage(eProc), rowIndex, item.file);
-        return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "PROCESS_ERROR", sizerErrorMessage(eProc)), rowIndex, tempFile);
+        return sizerReturnWithWorkFile(sizerPrepareStatusRow(item, "PROCESS_ERROR", sizerErrorMessage(eProc)), rowIndex, workFile, actionApplied);
     } finally {
         stabilizeIllustratorHost(40);
     }
@@ -1959,6 +1989,8 @@ function sizerOpenDocumentForExport(item, row, rowIndex){
     var usingWorkFile = false;
     var openedForExport = false;
     var doc = null;
+    var rowStatus = row && row.status ? row.status : "";
+    var needsOpenSizedDocument = rowStatus === "OK" || rowStatus === "CHECK" || rowStatus === "NOT OK";
 
     if (row && row.workFsPath) {
         try {
@@ -1967,7 +1999,11 @@ function sizerOpenDocumentForExport(item, row, rowIndex){
                 doc = sizerGetOpenDocumentByFile(fileObj);
                 if (doc) usingWorkFile = true;
                 else {
-                    sizerLog("warn", "Working file is closed; exporting the matched source file as-is.", rowIndex, item.file);
+                    if (needsOpenSizedDocument) {
+                        sizerLog("error", "Export skipped: sized source file is closed. Open and size it again before exporting.", rowIndex, item.file);
+                        return { doc: null, openedForExport: false, usingWorkFile: false };
+                    }
+                    sizerLog("warn", "Open working file is closed; exporting the matched source file as-is.", rowIndex, item.file);
                     fileObj = null;
                 }
             } else {
@@ -1978,13 +2014,18 @@ function sizerOpenDocumentForExport(item, row, rowIndex){
         }
     }
 
+    if (!doc && needsOpenSizedDocument) {
+        sizerLog("error", "Export skipped: sized source file is not open. Open and size it again before exporting.", rowIndex, item.file);
+        return { doc: null, openedForExport: false, usingWorkFile: false };
+    }
+
     if (!fileObj && matchInfo.file && matchInfo.file.exists) {
         fileObj = matchInfo.file;
         sizerLog("warn", "No open working file found; exporting the matched source file as-is.", rowIndex, item.file);
     }
 
     if (!fileObj || !fileObj.exists) {
-        sizerLog("error", "Export skipped: no matched or working file exists.", rowIndex, item.file);
+        sizerLog("error", "Export skipped: no matched or open working file exists.", rowIndex, item.file);
         return { doc: null, openedForExport: false, usingWorkFile: false };
     }
 
@@ -2084,10 +2125,10 @@ function sizerClearLog(){
     return sizerSuccess({ logs: [] });
 }
 
-function sizerCloseTempFiles(){
+function sizerCloseOpenFiles(){
     try {
         if (!SIZER_HOST_STATE.ready || !SIZER_HOST_STATE.rows || !SIZER_HOST_STATE.rows.length) {
-            return sizerSuccess({ closed: 0, attempted: 0, message: "No temp files to close." });
+            return sizerSuccess({ closed: 0, attempted: 0, message: "No open files to close." });
         }
 
         var seen = {};
@@ -2109,18 +2150,38 @@ function sizerCloseTempFiles(){
             try {
                 var fileObj = new File(paths[i]);
                 var doc = sizerGetOpenDocumentByFile(fileObj);
-                if (!doc) continue;
+                if (!doc) {
+                    var missingKey = sizerNormalizeFsPathForCompare(paths[i]);
+                    for (var m = 0; m < SIZER_HOST_STATE.rows.length; m++){
+                        if (SIZER_HOST_STATE.rows[m] && sizerNormalizeFsPathForCompare(SIZER_HOST_STATE.rows[m].workFsPath) === missingKey) {
+                            SIZER_HOST_STATE.rows[m].workFsPath = "";
+                            SIZER_HOST_STATE.rows[m].actionApplied = false;
+                        }
+                    }
+                    continue;
+                }
                 doc.close(SaveOptions.DONOTSAVECHANGES);
                 closed++;
+                var closedKey = sizerNormalizeFsPathForCompare(paths[i]);
+                for (var r = 0; r < SIZER_HOST_STATE.rows.length; r++){
+                    if (SIZER_HOST_STATE.rows[r] && sizerNormalizeFsPathForCompare(SIZER_HOST_STATE.rows[r].workFsPath) === closedKey) {
+                        SIZER_HOST_STATE.rows[r].workFsPath = "";
+                        SIZER_HOST_STATE.rows[r].actionApplied = false;
+                    }
+                }
                 stabilizeIllustratorHost(20);
             } catch (eCloseTemp) {
                 failed++;
             }
         }
 
-        var msg = "Closed " + closed + " temp file(s).";
+        var msg = "Closed " + closed + " open file(s) without saving.";
         if (failed > 0) msg += " Failed: " + failed + ".";
-        return sizerSuccess({ closed: closed, attempted: paths.length, failed: failed, message: msg });
+        var snapshot = sizerBuildSnapshot(msg);
+        snapshot.closed = closed;
+        snapshot.attempted = paths.length;
+        snapshot.failed = failed;
+        return sizerSuccess(snapshot);
     } catch (e) {
         return sizerFailure(e && e.message ? e.message : e);
     }
@@ -2228,6 +2289,70 @@ function sizerGetActiveRow(){
     }
 }
 
+function sizerCloseTempFiles(){
+    return sizerCloseOpenFiles();
+}
+
+function sizerOpenSelected(payloadJson){
+    if (!SIZER_HOST_STATE.ready) return sizerFailure("Scan the folder and email first.");
+
+    var oldUserInteractionLevel = app.userInteractionLevel;
+    try {
+        var payload = sizerParsePayload(payloadJson);
+        var settings = sizerNormalizeSettings(payload.settings || SIZER_HOST_STATE.settings);
+        var normalizedIndexes = sizerNormalizeSelectedIndexes(payload.selectedIndexes || []);
+        var i;
+
+        if (!normalizedIndexes.length) return sizerFailure("Select at least one row.");
+
+        SIZER_HOST_STATE.settings = settings;
+        app.userInteractionLevel = UserInteractionLevel.DONTDISPLAYALERTS;
+
+        var opened = 0;
+        var reused = 0;
+        var skipped = 0;
+
+        for (i = 0; i < normalizedIndexes.length; i++){
+            var rowIndex = normalizedIndexes[i];
+            var item = SIZER_HOST_STATE.items[rowIndex];
+            var result = null;
+            if (!item) {
+                skipped++;
+                continue;
+            }
+
+            result = sizerOpenSourceDocumentForItem(item, rowIndex, true);
+            if (result.ok) {
+                if (result.opened) opened++;
+                else reused++;
+            } else {
+                skipped++;
+                if (SIZER_HOST_STATE.rows[rowIndex] && result.error === "Missing source file.") {
+                    SIZER_HOST_STATE.rows[rowIndex] = sizerPrepareStatusRow(item, "MISSING_FILE");
+                }
+            }
+        }
+
+        SIZER_HOST_STATE.lastRun = {
+            scannedAt: SIZER_HOST_STATE.lastRun ? SIZER_HOST_STATE.lastRun.scannedAt : "",
+            processed: SIZER_HOST_STATE.lastRun ? SIZER_HOST_STATE.lastRun.processed : 0,
+            exported: SIZER_HOST_STATE.lastRun ? SIZER_HOST_STATE.lastRun.exported : 0,
+            skipped: skipped,
+            selectedCount: normalizedIndexes.length,
+            missingCount: SIZER_HOST_STATE.lastRun ? SIZER_HOST_STATE.lastRun.missingCount : 0,
+            opened: opened,
+            reused: reused
+        };
+
+        return sizerSuccess(sizerBuildSnapshot("Opened " + opened + " file(s), reused " + reused + ", skipped " + skipped + "."));
+    } catch (e) {
+        sizerLog("error", "Open selected failed: " + sizerErrorMessage(e), null, "");
+        return sizerFailure(sizerErrorMessage(e));
+    } finally {
+        app.userInteractionLevel = oldUserInteractionLevel;
+    }
+}
+
 function sizerActivateRow(payloadJson){
     try {
         if (!SIZER_HOST_STATE.ready) return sizerFailure("Nothing is loaded yet.");
@@ -2249,17 +2374,22 @@ function sizerActivateRow(payloadJson){
                 return sizerSuccess({ opened: false, file: openWork.doc.name, index: index });
             }
 
-            sizerLog("warn", "Temp working file is closed. Run Size again to recreate it.", index, item.file);
-            return sizerFailure("Temp working file is closed. Run Size again to recreate it.");
+            try {
+                targetFile = new File(row.workFsPath);
+                if (!targetFile.exists) targetFile = null;
+            } catch (eWorkTarget) {
+                targetFile = null;
+            }
         }
         if (!targetFile && matchInfo.file && matchInfo.file.exists) targetFile = matchInfo.file;
-        if (!targetFile || !targetFile.exists) return sizerFailure("This row does not have a matched or working file.");
+        if (!targetFile || !targetFile.exists) return sizerFailure("This row does not have a matched source file.");
 
         var doc = sizerGetOpenDocumentByFile(targetFile);
         if (doc) {
             sizerActivateDocument(doc);
             stabilizeIllustratorHost(60);
             sizerPrepareDocumentForReview(doc);
+            sizerReturnWithWorkFile(row, index, targetFile);
             return sizerSuccess({ opened: false, file: doc.name, index: index });
         }
 
@@ -2267,6 +2397,7 @@ function sizerActivateRow(payloadJson){
         stabilizeIllustratorHost(80);
         sizerActivateDocument(doc);
         sizerPrepareDocumentForReview(doc);
+        sizerReturnWithWorkFile(row, index, targetFile);
         return sizerSuccess({ opened: true, file: doc.name, index: index });
     } catch (e) {
         return sizerFailure(e && e.message ? e.message : e);
@@ -2309,7 +2440,7 @@ function sizerSizeSelected(payloadJson){
             if (!nextRow || nextRow.status === "MISSING_FILE") skipped++;
             if (nextRow && nextRow.status === "PROCESS_ERROR" && sizerIsDocumentStateError(nextRow.statusNote)) {
                 skipped += normalizedIndexes.length - i - 1;
-                sizerLog("error", "Batch stopped because Illustrator lost its active document state. Retry Size Selected after closing any stuck temp documents.", rowIndex, item.file);
+                sizerLog("error", "Batch stopped because Illustrator lost its active document state. Retry Size Selected after closing any stuck open documents.", rowIndex, item.file);
                 break;
             }
         }
