@@ -53,14 +53,27 @@ body {
   margin: 0;
   min-height: 100%;
   background:
-    radial-gradient(circle at top left, rgba(90, 215, 255, 0.16), transparent 28%),
-    radial-gradient(circle at top right, rgba(118, 212, 168, 0.08), transparent 24%),
+    radial-gradient(circle at 10% 10%, rgba(90, 215, 255, 0.18), transparent 25%),
+    radial-gradient(circle at 82% 4%, rgba(118, 212, 168, 0.1), transparent 23%),
+    linear-gradient(135deg, rgba(90, 215, 255, 0.04), transparent 34%),
     linear-gradient(180deg, var(--bg-top), var(--bg));
   background-repeat: no-repeat;
   color: var(--text);
   font: 11px/1.35 "Bahnschrift", "Segoe UI", sans-serif;
   -webkit-user-select: none;
   user-select: none;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180' viewBox='0 0 180 180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.62' numOctaves='10' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='table' tableValues='0 0.62'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 180px 180px;
+  opacity: 0.28;
+  mix-blend-mode: screen;
 }
 
 button,
@@ -81,6 +94,8 @@ textarea {
 }
 
 .panel-shell {
+  position: relative;
+  z-index: 1;
   display: grid;
   grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
   gap: 8px;
@@ -96,9 +111,14 @@ textarea {
 .log-panel {
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: var(--panel);
+  background: rgba(20, 26, 34, 0.68);
   box-shadow: var(--shadow);
-  backdrop-filter: blur(8px);
+  backdrop-filter: blur(14px) saturate(1.25);
+}
+
+.table-card {
+  background: rgba(15, 20, 27, 0.9);
+  backdrop-filter: blur(10px) saturate(1.12);
 }
 
 .hero {
@@ -202,7 +222,7 @@ textarea {
   min-width: 0;
   border: 1px solid var(--line-strong);
   border-radius: 10px;
-  background: rgba(8, 12, 17, 0.84);
+  background: rgba(8, 12, 17, 0.72);
   color: var(--text);
   padding: 7px 9px;
   outline: none;
@@ -259,7 +279,7 @@ textarea {
   padding: 8px 10px;
   border-radius: 10px;
   border: 1px solid var(--line);
-  background: rgba(8, 12, 17, 0.58);
+  background: rgba(8, 12, 17, 0.52);
 }
 
 .toolbar {
@@ -323,7 +343,7 @@ body.is-busy .status-strip::after {
   min-width: 64px;
   padding: 6px 8px;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.032);
+  background: rgba(255, 255, 255, 0.04);
   border: 1px solid var(--line);
   text-align: left;
   transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
@@ -389,7 +409,7 @@ body.is-busy .status-strip::after {
   border: 1px solid var(--line-strong);
   cursor: pointer;
   color: var(--text);
-  background: rgba(255, 255, 255, 0.035);
+  background: rgba(255, 255, 255, 0.045);
   transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
 }
 
@@ -485,7 +505,7 @@ select:disabled {
   overflow: auto;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: rgba(8, 12, 17, 0.88);
+  background: rgba(8, 12, 17, 0.74);
   color: var(--muted);
   padding: 7px 9px;
   outline: none;
