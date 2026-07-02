@@ -10,12 +10,6 @@
     filenameFormat: document.getElementById("filename-format"),
     runAction: document.getElementById("run-action"),
     scanBtn: document.getElementById("scan-btn"),
-    selectAllBtn: document.getElementById("select-all-btn"),
-    selectGreenBtn: document.getElementById("select-green-btn"),
-    selectRedBtn: document.getElementById("select-red-btn"),
-    selectPendingBtn: document.getElementById("select-pending-btn"),
-    selectReviewBtn: document.getElementById("select-review-btn"),
-    clearSelectionBtn: document.getElementById("clear-selection-btn"),
     clearBtn: document.getElementById("clear-btn"),
     openBtn: document.getElementById("open-btn"),
     processBtn: document.getElementById("process-btn"),
@@ -42,7 +36,8 @@
     lastRun: null,
     financials: null,
     logs: [],
-    sort: null
+    sort: null,
+    selectionMode: null
   };
 
   var PREFS_KEY = "sizerIllustratorPrefs.v1";
@@ -242,12 +237,6 @@
     state.busy = isBusy;
     [
       els.scanBtn,
-      els.selectAllBtn,
-      els.selectGreenBtn,
-      els.selectRedBtn,
-      els.selectPendingBtn,
-      els.selectReviewBtn,
-      els.clearSelectionBtn,
       els.clearBtn,
       els.openBtn,
       els.processBtn,
@@ -316,30 +305,36 @@
       return;
     }
 
+    var selectedCount = countSelected();
     var summary = {
-      items: state.rows.length,
+      all: state.rows.filter(function (row) { return row.isSelectable; }).length,
       ok: state.rows.filter(function (row) { return row.status === "OK"; }).length,
-      check: state.rows.filter(function (row) { return row.status === "CHECK"; }).length,
-      hold: state.rows.filter(function (row) { return row.status === "NOT OK"; }).length,
+      review: state.rows.filter(function (row) { return isReviewStatus(row.status); }).length,
       blocked: state.rows.filter(function (row) { return isBlockedStatus(row.status); }).length,
       pending: state.rows.filter(function (row) { return row.status === "QUEUED"; }).length,
       exported: state.rows.filter(function (row) { return !!row.outputFsPath; }).length
     };
 
     var chips = [
-      { label: "Items", value: summary.items },
-      { label: "Pending", value: summary.pending },
-      { label: "OK", value: summary.ok },
-      { label: "Check", value: summary.check },
-      { label: "Hold", value: summary.hold },
-      { label: "Blocked", value: summary.blocked },
-      { label: "Exported", value: summary.exported }
+      { label: "All", value: summary.all, action: "all", title: "Select all selectable rows." },
+      { label: "Pending", value: summary.pending, action: "pending", title: "Select queued rows." },
+      { label: "OK", value: summary.ok, action: "ok", title: "Select OK rows." },
+      { label: "Review", value: summary.review, action: "review", title: "Select CHECK and NOT OK rows." },
+      { label: "Blocked", value: summary.blocked, action: "blocked", title: "Select rows blocked by errors." },
+      { label: "Exported", value: summary.exported, action: "exported", title: "Select rows with an exported PNG." },
+      { label: "None", value: "", action: "none", title: "Clear the current selection." }
     ];
 
     chips.forEach(function (chip) {
-      var node = document.createElement("div");
-      node.className = "chip";
-      node.innerHTML = "<span>" + chip.label + "</span><strong>" + chip.value + "</strong>";
+      var isNone = chip.action === "none";
+      var isDisabled = isNone ? selectedCount === 0 : chip.value === 0;
+      var node = document.createElement("button");
+      node.className = "chip selection-chip" + (state.selectionMode === chip.action ? " active" : "") + (isNone ? " chip-none" : "");
+      node.type = "button";
+      node.setAttribute("data-select-action", chip.action);
+      node.title = chip.title;
+      node.disabled = state.busy || isDisabled;
+      node.innerHTML = "<span>" + chip.label + "</span>" + (isNone ? "" : "<strong>" + chip.value + "</strong>");
       els.summaryChips.appendChild(node);
     });
   }
@@ -476,14 +471,9 @@
       els.openBtn.disabled = !hasRows || selectedCount === 0;
       els.exportBtn.disabled = !hasRows || selectedCount === 0;
       els.closeTempBtn.disabled = !hasRows || !state.rows.some(function (row) { return !!row.workFsPath; });
-      els.selectAllBtn.disabled = !hasRows;
-      els.selectGreenBtn.disabled = !hasRows;
-      els.selectRedBtn.disabled = !hasRows;
-      els.selectPendingBtn.disabled = !hasRows;
-      els.selectReviewBtn.disabled = !hasRows;
-      els.clearSelectionBtn.disabled = !hasRows || selectedCount === 0;
       els.clearBtn.disabled = !hasRows && !els.folderPath.value && !els.emailText.value;
     }
+    renderSummary();
   }
 
   function hasMatchIssue(row) {
@@ -579,6 +569,7 @@
         state.selected[row.index] = true;
       }
     });
+    state.selectionMode = countSelected() > 0 ? "pending" : null;
   }
 
   function renderRows() {
@@ -725,6 +716,7 @@
       });
 
       applyHostSnapshot(data);
+      state.selectionMode = null;
       renderAll();
       persistPrefs();
       setStatus(data.message || "Selected rows sized.", false);
@@ -752,6 +744,7 @@
       });
 
       applyHostSnapshot(data);
+      state.selectionMode = null;
       renderAll();
       persistPrefs();
       setStatus(data.message || "Selected rows opened.", false);
@@ -779,6 +772,7 @@
       });
 
       applyHostSnapshot(data);
+      state.selectionMode = null;
       renderAll();
       persistPrefs();
       setStatus(data.message || "Selected rows exported.", false);
@@ -817,6 +811,7 @@
     state.financials = null;
     state.logs = [];
     state.sort = null;
+    state.selectionMode = null;
     els.folderPath.value = "";
     els.emailText.value = "";
     autoResizeEmail();
@@ -826,7 +821,7 @@
     setBusy(false);
   }
 
-  function selectRowsByPredicate(predicate) {
+  function selectRowsByPredicate(predicate, mode) {
     var next = {};
     state.rows.forEach(function (row) {
       if (row.isSelectable && predicate(row)) {
@@ -834,18 +829,57 @@
       }
     });
     state.selected = next;
-    renderRows();
+    state.selectionMode = mode || null;
+    renderAll();
   }
 
-  function selectRowsByStatus(statuses) {
+  function selectRowsByStatus(statuses, mode) {
     selectRowsByPredicate(function (row) {
       return statuses.indexOf(row.status) >= 0;
-    });
+    }, mode);
   }
 
   function clearSelection() {
     state.selected = {};
-    renderRows();
+    state.selectionMode = "none";
+    renderAll();
+  }
+
+  function selectRowsBySummaryAction(action) {
+    if (action === "all") {
+      selectRowsByPredicate(function () { return true; }, "all");
+      setStatus("All selectable rows selected.", false);
+      return;
+    }
+    if (action === "pending") {
+      selectRowsByStatus(["QUEUED"], "pending");
+      setStatus("Pending rows selected.", false);
+      return;
+    }
+    if (action === "ok") {
+      selectRowsByStatus(["OK"], "ok");
+      setStatus("OK rows selected.", false);
+      return;
+    }
+    if (action === "review") {
+      selectRowsByStatus(["CHECK", "NOT OK"], "review");
+      setStatus("Review rows selected.", false);
+      return;
+    }
+    if (action === "blocked") {
+      selectRowsByPredicate(function (row) { return isBlockedStatus(row.status); }, "blocked");
+      setStatus("Blocked rows selected.", false);
+      return;
+    }
+    if (action === "exported") {
+      selectRowsByPredicate(function (row) { return !!row.outputFsPath; }, "exported");
+      setStatus("Exported rows selected.", false);
+      return;
+    }
+    if (action === "none") {
+      clearSelection();
+      setStatus("Selection cleared.", false);
+    }
   }
 
   async function closeTempFiles() {
@@ -908,34 +942,10 @@
       }
     });
 
-    els.selectAllBtn.addEventListener("click", function () {
-      selectRowsByPredicate(function () { return true; });
-      setStatus("All selectable rows selected.", false);
-    });
-
-    els.selectGreenBtn.addEventListener("click", function () {
-      selectRowsByStatus(["OK"]);
-      setStatus("Green rows selected.", false);
-    });
-
-    els.selectRedBtn.addEventListener("click", function () {
-      selectRowsByPredicate(function (row) { return isRedStatus(row.status); });
-      setStatus("Red rows selected.", false);
-    });
-
-    els.selectPendingBtn.addEventListener("click", function () {
-      selectRowsByStatus(["QUEUED"]);
-      setStatus("Pending rows selected.", false);
-    });
-
-    els.selectReviewBtn.addEventListener("click", function () {
-      selectRowsByStatus(["CHECK", "NOT OK"]);
-      setStatus("Review rows selected.", false);
-    });
-
-    els.clearSelectionBtn.addEventListener("click", function () {
-      clearSelection();
-      setStatus("Selection cleared.", false);
+    els.summaryChips.addEventListener("click", function (event) {
+      var button = event.target.closest("[data-select-action]");
+      if (!button || button.disabled) return;
+      selectRowsBySummaryAction(button.getAttribute("data-select-action"));
     });
 
     els.copyLogBtn.addEventListener("click", function () {
@@ -955,6 +965,7 @@
       var checkbox = event.target.closest(".row-check");
       if (!checkbox) return;
       state.selected[checkbox.getAttribute("data-index")] = checkbox.checked;
+      state.selectionMode = null;
       updateSelectionText();
       syncActionAvailability();
     });

@@ -2519,7 +2519,7 @@ function sizerExportSelected(payloadJson){
 
         if (!reportResult || !reportResult.ok) return sizerFailure("Selected rows exported, but HTML report could not be written: " + (reportResult ? reportResult.error : "unknown report error"));
 
-        return sizerSuccess(sizerBuildSnapshot("Selected rows exported. Report: " + reportResult.path));
+        return sizerSuccess(sizerBuildSnapshot("Selected rows exported."));
     } catch (e) {
         sizerLog("error", "Export selected failed: " + sizerErrorMessage(e), null, "");
         return sizerFailure(sizerErrorMessage(e));
