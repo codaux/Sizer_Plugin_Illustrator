@@ -37,7 +37,8 @@
     financials: null,
     logs: [],
     sort: null,
-    selectionMode: null
+    selectionMode: null,
+    lastCheckedIndex: null
   };
 
   var PREFS_KEY = "sizerIllustratorPrefs.v1";
@@ -130,6 +131,7 @@
     state.rows = data.rows || [];
     state.lastRun = data.lastRun || null;
     state.financials = data.financials || null;
+    state.lastCheckedIndex = null;
     if (data.logs) state.logs = data.logs;
   }
 
@@ -420,6 +422,8 @@
   }
 
   function setSort(key) {
+    state.lastCheckedIndex = null;
+
     if (key === "index") {
       state.sort = null;
       setStatus("Original order restored.", false);
@@ -570,6 +574,7 @@
       }
     });
     state.selectionMode = countSelected() > 0 ? "pending" : null;
+    state.lastCheckedIndex = null;
   }
 
   function renderRows() {
@@ -812,6 +817,7 @@
     state.logs = [];
     state.sort = null;
     state.selectionMode = null;
+    state.lastCheckedIndex = null;
     els.folderPath.value = "";
     els.emailText.value = "";
     autoResizeEmail();
@@ -830,6 +836,7 @@
     });
     state.selected = next;
     state.selectionMode = mode || null;
+    state.lastCheckedIndex = null;
     renderAll();
   }
 
@@ -842,7 +849,52 @@
   function clearSelection() {
     state.selected = {};
     state.selectionMode = "none";
+    state.lastCheckedIndex = null;
     renderAll();
+  }
+
+  function findVisibleRowPosition(index) {
+    var rows = getVisibleRows();
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i] && rows[i].index === index) return i;
+    }
+    return -1;
+  }
+
+  function setSelectedValue(index, checked) {
+    if (checked) state.selected[index] = true;
+    else delete state.selected[index];
+  }
+
+  function applyCheckboxSelection(index, checked, isRange) {
+    if (isNaN(index)) return;
+
+    var anchorIndex = state.lastCheckedIndex;
+    state.selectionMode = null;
+
+    if (isRange && anchorIndex !== null && typeof anchorIndex !== "undefined") {
+      var rows = getVisibleRows();
+      var anchorPos = findVisibleRowPosition(anchorIndex);
+      var currentPos = findVisibleRowPosition(index);
+
+      if (anchorPos >= 0 && currentPos >= 0) {
+        var start = Math.min(anchorPos, currentPos);
+        var end = Math.max(anchorPos, currentPos);
+
+        for (var i = start; i <= end; i++) {
+          if (rows[i] && rows[i].isSelectable) {
+            setSelectedValue(rows[i].index, checked);
+          }
+        }
+      } else {
+        setSelectedValue(index, checked);
+      }
+    } else {
+      setSelectedValue(index, checked);
+    }
+
+    state.lastCheckedIndex = index;
+    renderRows();
   }
 
   function selectRowsBySummaryAction(action) {
@@ -961,13 +1013,10 @@
       setStatus("Log cleared.", false);
     });
 
-    els.rowsBody.addEventListener("change", function (event) {
+    els.rowsBody.addEventListener("click", function (event) {
       var checkbox = event.target.closest(".row-check");
       if (!checkbox) return;
-      state.selected[checkbox.getAttribute("data-index")] = checkbox.checked;
-      state.selectionMode = null;
-      updateSelectionText();
-      syncActionAvailability();
+      applyCheckboxSelection(parseInt(checkbox.getAttribute("data-index"), 10), checkbox.checked, event.shiftKey);
     });
 
     document.querySelector("thead").addEventListener("click", function (event) {
