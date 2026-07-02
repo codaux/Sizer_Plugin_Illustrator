@@ -237,6 +237,9 @@
 
   function setBusy(isBusy, message) {
     state.busy = isBusy;
+    if (document.body && document.body.classList) {
+      document.body.classList.toggle("is-busy", isBusy);
+    }
     [
       els.scanBtn,
       els.clearBtn,
